@@ -1,0 +1,38 @@
+services:
+  capstone-postgresql:
+    image: postgres:18.2
+    container_name: capstone-postgresql
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: capstone
+      POSTGRES_PASSWORD: capstone
+      POSTGRES_DB: capstone
+      # PGDATA: /var/lib/postgresql/data # UNCOMMENT KALAU MAU CUSTOM DATA DIRECTORY, defaultnya udah di set ke /var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./data:/var/lib/postgresql # biar data nya ga ilang kalo container nya di stop atau di remove
+    networks:
+      - capstone-network
+  
+  capstone-postgregui:
+    image: dpage/pgadmin4:9.12.0
+    container_name: capstone-postgregui
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: angelicasutiwhiharto@gmail.com
+      PGADMIN_DEFAULT_PASSWORD: capstone
+      PGADMIN_CONFIG_SERVER_MODE: 'False' # mode single user
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: 'False' # biar ga minta master password pas login
+    ports:
+      - "8080:80"
+    volumes:
+      - ./pgadmin:/var/lib/pgadmin # biar data nya ga ilang kalo container nya di stop atau di remove
+    depends_on:
+      - capstone-postgresql
+    networks:
+      - capstone-network
+      
+networks:
+  capstone-network:
+    external: true
