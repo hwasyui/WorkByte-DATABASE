@@ -19,8 +19,9 @@ services:
     image: dpage/pgadmin4:9.12.0
     container_name: capstone-postgregui
     restart: unless-stopped
+    user: root
     environment:
-      PGADMIN_DEFAULT_EMAIL: angelicasutiwhiharto@gmail.com
+      PGADMIN_DEFAULT_EMAIL: angelica.whiharto@student.president.ac.id
       PGADMIN_DEFAULT_PASSWORD: capstone
       PGADMIN_CONFIG_SERVER_MODE: 'False' # mode single user
       PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: 'False' # biar ga minta master password pas login
