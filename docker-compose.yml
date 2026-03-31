@@ -10,7 +10,7 @@ services:
       TZ: Asia/Jakarta
       # PGDATA: /var/lib/postgresql/data # UNCOMMENT KALAU MAU CUSTOM DATA DIRECTORY, defaultnya udah di set ke /var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - ./data:/var/lib/postgresql # biar data nya ga ilang kalo container nya di stop atau di remove
       - ./query:/query # biar bisa akses file sql buat create table atau insert data dari luar container 
@@ -29,7 +29,7 @@ services:
       PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: 'False' # biar ga minta master password pas login
       TZ: Asia/Jakarta
     ports:
-      - "8080:80"
+      - "127.0.0.1:8080:80"
     volumes:
       - ./pgadmin:/var/lib/pgadmin # biar data nya ga ilang kalo container nya di stop atau di remove
     depends_on:
