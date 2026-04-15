@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS freelancer (
     estimated_rate      DECIMAL(10, 2),
     rate_time           rate_time_type DEFAULT 'hourly',
     rate_currency       VARCHAR(10) DEFAULT 'USD',
-    total_projects      INTEGER DEFAULT 0,
+    total_jobs          INTEGER DEFAULT 0,
     created_at          TIMESTAMP DEFAULT NOW(),
     updated_at          TIMESTAMP DEFAULT NOW(),
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
@@ -56,16 +56,17 @@ CREATE TRIGGER trg_freelancer_updated_at
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 CREATE TABLE IF NOT EXISTS client (
-    client_id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id                   UUID NOT NULL UNIQUE,
-    company_name              VARCHAR(255),
-    company_description       TEXT,
-    website_url               VARCHAR(500),
-    total_jobs_posted         INTEGER DEFAULT 0,
-    total_projects_completed  INTEGER DEFAULT 0,
-    average_rating_given      DECIMAL(3, 2),
-    created_at                TIMESTAMP DEFAULT NOW(),
-    updated_at                TIMESTAMP DEFAULT NOW(),
+    client_id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id                  UUID NOT NULL UNIQUE,
+    full_name                VARCHAR(255),
+    bio                      TEXT,
+    website_url              VARCHAR(500),
+    profile_picture_url      VARCHAR(500),
+    total_jobs_posted        INTEGER DEFAULT 0,
+    total_jobs_completed     INTEGER DEFAULT 0,
+    average_rating_given     DECIMAL(3, 2),
+    created_at               TIMESTAMP DEFAULT NOW(),
+    updated_at               TIMESTAMP DEFAULT NOW(),
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
 );
 
@@ -262,6 +263,7 @@ CREATE TABLE IF NOT EXISTS proposal (
     status            proposal_status NOT NULL,
     is_ai_generated   BOOLEAN DEFAULT FALSE,
     submitted_at      TIMESTAMP DEFAULT NOW(),
+    UNIQUE (freelancer_id, job_role_id),
     FOREIGN KEY (job_post_id)   REFERENCES job_post(job_post_id)     ON DELETE CASCADE,
     FOREIGN KEY (job_role_id)   REFERENCES job_role(job_role_id)     ON DELETE SET NULL,
     FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE
@@ -279,26 +281,28 @@ CREATE TABLE IF NOT EXISTS proposal_file (
 );
 
 CREATE TABLE IF NOT EXISTS contract (
-    contract_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    job_post_id            UUID NOT NULL,
-    job_role_id            UUID NOT NULL,
-    proposal_id            UUID NOT NULL,
-    freelancer_id          UUID NOT NULL,
-    client_id              UUID NOT NULL,
-    contract_title         VARCHAR(255) NOT NULL,
-    role_title             VARCHAR(255),
-    agreed_budget          DECIMAL(12, 2) NOT NULL,
-    budget_currency        VARCHAR(10) DEFAULT 'USD',
-    payment_structure      payment_structure NOT NULL,
-    agreed_duration        VARCHAR(100),
-    status                 contract_status NOT NULL,
-    start_date             DATE NOT NULL,
-    end_date               DATE,
-    actual_completion_date DATE,
-    total_hours_worked     DECIMAL(8, 2),
-    total_paid             DECIMAL(12, 2) DEFAULT 0,
-    created_at             TIMESTAMP DEFAULT NOW(),
-    updated_at             TIMESTAMP DEFAULT NOW(),
+    contract_id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    job_post_id                UUID NOT NULL,
+    job_role_id                UUID NOT NULL,
+    proposal_id                UUID NOT NULL,
+    freelancer_id              UUID NOT NULL,
+    client_id                  UUID NOT NULL,
+    contract_title             VARCHAR(255) NOT NULL,
+    role_title                 VARCHAR(255),
+    agreed_budget              DECIMAL(12, 2) NOT NULL,
+    budget_currency            VARCHAR(10) DEFAULT 'USD',
+    payment_structure          payment_structure NOT NULL,
+    agreed_duration            VARCHAR(100),
+    status                     contract_status NOT NULL,
+    start_date                 DATE NOT NULL,
+    end_date                   DATE,
+    actual_completion_date     DATE,
+    total_hours_worked         DECIMAL(8, 2),
+    total_paid                 DECIMAL(12, 2) DEFAULT 0,
+    contract_pdf_url           VARCHAR(500),
+    contract_pdf_generated_at  TIMESTAMP,
+    created_at                 TIMESTAMP DEFAULT NOW(),
+    updated_at                 TIMESTAMP DEFAULT NOW(),
     FOREIGN KEY (job_post_id)   REFERENCES job_post(job_post_id)     ON DELETE RESTRICT,
     FOREIGN KEY (job_role_id)   REFERENCES job_role(job_role_id)     ON DELETE RESTRICT,
     FOREIGN KEY (proposal_id)   REFERENCES proposal(proposal_id)     ON DELETE RESTRICT,
@@ -310,20 +314,39 @@ CREATE TRIGGER trg_contract_updated_at
     BEFORE UPDATE ON contract
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
+CREATE TABLE IF NOT EXISTS contract_terms (
+    contract_terms_id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    contract_id          UUID NOT NULL UNIQUE,
+    termination_notice   INTEGER,
+    governing_law        VARCHAR(100),
+    confidentiality      BOOLEAN DEFAULT FALSE,
+    confidentiality_text TEXT,
+    late_payment_penalty DECIMAL(5, 2),
+    dispute_resolution   VARCHAR(50),
+    revision_rounds      INTEGER,
+    additional_clauses   TEXT,
+    created_at           TIMESTAMP DEFAULT NOW(),
+    FOREIGN KEY (contract_id) REFERENCES contract(contract_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS contract_milestone (
-    milestone_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    contract_id           UUID NOT NULL,
-    milestone_title       VARCHAR(255) NOT NULL,
-    milestone_description TEXT,
-    milestone_percentage  DECIMAL(5, 2) NOT NULL,
-    milestone_amount      DECIMAL(12, 2) NOT NULL,
-    milestone_order       INTEGER NOT NULL,
-    due_date              DATE,
-    status                milestone_status NOT NULL,
-    completed_at          TIMESTAMP,
-    paid_at               TIMESTAMP,
-    created_at            TIMESTAMP DEFAULT NOW(),
-    updated_at            TIMESTAMP DEFAULT NOW(),
+    milestone_id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    contract_id               UUID NOT NULL,
+    milestone_title           VARCHAR(255) NOT NULL,
+    milestone_description     TEXT,
+    milestone_percentage      DECIMAL(5, 2) NOT NULL,
+    milestone_amount          DECIMAL(12, 2) NOT NULL,
+    milestone_order           INTEGER NOT NULL,
+    due_date                  DATE,
+    status                    milestone_status NOT NULL,
+    client_approved           BOOLEAN DEFAULT FALSE,
+    payment_requested         BOOLEAN DEFAULT FALSE,
+    payment_released          BOOLEAN DEFAULT FALSE,
+    freelancer_confirmed_paid BOOLEAN DEFAULT FALSE,
+    completed_at              TIMESTAMP,
+    paid_at                   TIMESTAMP,
+    created_at                TIMESTAMP DEFAULT NOW(),
+    updated_at                TIMESTAMP DEFAULT NOW(),
     FOREIGN KEY (contract_id) REFERENCES contract(contract_id) ON DELETE CASCADE
 );
 
@@ -343,7 +366,7 @@ CREATE TABLE IF NOT EXISTS portfolio (
     created_at          TIMESTAMP DEFAULT NOW(),
     updated_at          TIMESTAMP DEFAULT NOW(),
     FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE,
-    FOREIGN KEY (contract_id) REFERENCES contract(contract_id) ON DELETE SET NULL
+    FOREIGN KEY (contract_id)   REFERENCES contract(contract_id)     ON DELETE SET NULL
 );
 
 CREATE TRIGGER trg_portfolio_updated_at
@@ -372,11 +395,17 @@ CREATE TABLE IF NOT EXISTS rating (
     timeline_compliance_score INTEGER CHECK (timeline_compliance_score BETWEEN 1 AND 5),
     overall_rating            DECIMAL(3, 2),
     review_text               TEXT,
+    update_count              INTEGER DEFAULT 0,
     created_at                TIMESTAMP DEFAULT NOW(),
+    updated_at                TIMESTAMP DEFAULT NOW(),
     FOREIGN KEY (contract_id)   REFERENCES contract(contract_id)     ON DELETE CASCADE,
     FOREIGN KEY (client_id)     REFERENCES client(client_id)         ON DELETE RESTRICT,
     FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE RESTRICT
 );
+
+CREATE TRIGGER trg_rating_updated_at
+    BEFORE UPDATE ON rating
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 CREATE TABLE IF NOT EXISTS performance_rating (
     performance_rating_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -420,9 +449,10 @@ CREATE TRIGGER trg_client_trust_score_updated_at
 CREATE TABLE IF NOT EXISTS freelancer_embedding (
     embedding_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     freelancer_id      UUID NOT NULL UNIQUE,
-    embedding_vector   VECTOR(1536) NOT NULL,
-    source_text        TEXT NOT NULL,
+    embedding_vector   VECTOR(768),
+    source_text        TEXT,
     embedding_metadata JSONB,
+    embedding_dirty    BOOLEAN NOT NULL DEFAULT TRUE,
     created_at         TIMESTAMP DEFAULT NOW(),
     updated_at         TIMESTAMP DEFAULT NOW(),
     FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE
@@ -432,12 +462,21 @@ CREATE TRIGGER trg_freelancer_embedding_updated_at
     BEFORE UPDATE ON freelancer_embedding
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
+CREATE INDEX IF NOT EXISTS idx_freelancer_embedding_hnsw
+    ON freelancer_embedding USING hnsw (embedding_vector vector_cosine_ops)
+    WHERE embedding_vector IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_freelancer_embedding_dirty
+    ON freelancer_embedding (embedding_dirty)
+    WHERE embedding_dirty = TRUE;
+
 CREATE TABLE IF NOT EXISTS job_embedding (
     embedding_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     job_post_id        UUID NOT NULL UNIQUE,
-    embedding_vector   VECTOR(1536) NOT NULL,
-    source_text        TEXT NOT NULL,
+    embedding_vector   VECTOR(768),
+    source_text        TEXT,
     embedding_metadata JSONB,
+    embedding_dirty    BOOLEAN NOT NULL DEFAULT TRUE,
     created_at         TIMESTAMP DEFAULT NOW(),
     updated_at         TIMESTAMP DEFAULT NOW(),
     FOREIGN KEY (job_post_id) REFERENCES job_post(job_post_id) ON DELETE CASCADE
@@ -446,6 +485,52 @@ CREATE TABLE IF NOT EXISTS job_embedding (
 CREATE TRIGGER trg_job_embedding_updated_at
     BEFORE UPDATE ON job_embedding
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE INDEX IF NOT EXISTS idx_job_embedding_hnsw
+    ON job_embedding USING hnsw (embedding_vector vector_cosine_ops)
+    WHERE embedding_vector IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_job_embedding_dirty
+    ON job_embedding (embedding_dirty)
+    WHERE embedding_dirty = TRUE;
+
+CREATE TABLE IF NOT EXISTS contract_embedding (
+    embedding_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    contract_id        UUID NOT NULL UNIQUE,
+    freelancer_id      UUID NOT NULL,
+    embedding_vector   VECTOR(768),
+    source_text        TEXT,
+    embedding_metadata JSONB,
+    embedding_dirty    BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at         TIMESTAMP DEFAULT NOW(),
+    updated_at         TIMESTAMP DEFAULT NOW(),
+    FOREIGN KEY (contract_id)   REFERENCES contract(contract_id)     ON DELETE CASCADE,
+    FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE
+);
+
+CREATE OR REPLACE FUNCTION set_contract_embedding_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_contract_embedding_updated_at
+    BEFORE UPDATE ON contract_embedding
+    FOR EACH ROW EXECUTE FUNCTION set_contract_embedding_updated_at();
+
+CREATE INDEX IF NOT EXISTS idx_contract_embedding_hnsw
+    ON contract_embedding USING hnsw (embedding_vector vector_cosine_ops)
+    WHERE embedding_vector IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_contract_embedding_dirty
+    ON contract_embedding (embedding_dirty)
+    WHERE embedding_dirty = TRUE;
+
+CREATE INDEX IF NOT EXISTS idx_contract_embedding_freelancer
+    ON contract_embedding (freelancer_id)
+    WHERE embedding_vector IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS message (
     message_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
