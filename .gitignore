@@ -1,0 +1,18 @@
+# Database
+database/data/
+data/
+pg_wal/
+pg_xact/
+pg_log/
+*.db
+*.sqlite
+
+# Postgres runtime
+postmaster.pid
+*.pid
+
+# pgadmin
+pgadmin/
+
+# logs
+*.log
