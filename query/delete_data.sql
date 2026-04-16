@@ -11,7 +11,6 @@ TRUNCATE TABLE
     performance_rating,
     rating,
     saved_job,
-    contract_milestone,
     contract_terms,
     portfolio,
     contract,

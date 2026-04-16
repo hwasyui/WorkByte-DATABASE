@@ -5,7 +5,6 @@ DROP TABLE IF EXISTS client_trust_score     CASCADE;
 DROP TABLE IF EXISTS performance_rating     CASCADE;
 DROP TABLE IF EXISTS rating                 CASCADE;
 DROP TABLE IF EXISTS saved_job              CASCADE;
-DROP TABLE IF EXISTS contract_milestone     CASCADE;
 DROP TABLE IF EXISTS portfolio              CASCADE;
 DROP TABLE IF EXISTS contract               CASCADE;
 DROP TABLE IF EXISTS proposal_file          CASCADE;
@@ -26,7 +25,6 @@ DROP TABLE IF EXISTS client                 CASCADE;
 DROP TABLE IF EXISTS freelancer             CASCADE;
 DROP TABLE IF EXISTS users                  CASCADE;
 
-DROP TYPE IF EXISTS milestone_status   CASCADE;
 DROP TYPE IF EXISTS contract_status    CASCADE;
 DROP TYPE IF EXISTS payment_structure  CASCADE;
 DROP TYPE IF EXISTS proposal_status    CASCADE;

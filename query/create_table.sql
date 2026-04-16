@@ -12,7 +12,6 @@ CREATE TYPE importance_level      AS ENUM ('nice_to_have', 'preferred', 'require
 CREATE TYPE proposal_status       AS ENUM ('pending', 'accepted', 'rejected', 'withdrawn');
 CREATE TYPE payment_structure     AS ENUM ('full_payment', 'milestone_based');
 CREATE TYPE contract_status       AS ENUM ('active', 'completed', 'cancelled', 'disputed');
-CREATE TYPE milestone_status      AS ENUM ('pending', 'in_progress', 'completed', 'paid');
 
 CREATE OR REPLACE FUNCTION set_updated_at()
 RETURNS TRIGGER AS $$
@@ -325,34 +324,10 @@ CREATE TABLE IF NOT EXISTS contract_terms (
     dispute_resolution   VARCHAR(50),
     revision_rounds      INTEGER,
     additional_clauses   TEXT,
+    payment_schedule     TEXT,
     created_at           TIMESTAMP DEFAULT NOW(),
     FOREIGN KEY (contract_id) REFERENCES contract(contract_id) ON DELETE CASCADE
 );
-
-CREATE TABLE IF NOT EXISTS contract_milestone (
-    milestone_id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    contract_id               UUID NOT NULL,
-    milestone_title           VARCHAR(255) NOT NULL,
-    milestone_description     TEXT,
-    milestone_percentage      DECIMAL(5, 2) NOT NULL,
-    milestone_amount          DECIMAL(12, 2) NOT NULL,
-    milestone_order           INTEGER NOT NULL,
-    due_date                  DATE,
-    status                    milestone_status NOT NULL,
-    client_approved           BOOLEAN DEFAULT FALSE,
-    payment_requested         BOOLEAN DEFAULT FALSE,
-    payment_released          BOOLEAN DEFAULT FALSE,
-    freelancer_confirmed_paid BOOLEAN DEFAULT FALSE,
-    completed_at              TIMESTAMP,
-    paid_at                   TIMESTAMP,
-    created_at                TIMESTAMP DEFAULT NOW(),
-    updated_at                TIMESTAMP DEFAULT NOW(),
-    FOREIGN KEY (contract_id) REFERENCES contract(contract_id) ON DELETE CASCADE
-);
-
-CREATE TRIGGER trg_contract_milestone_updated_at
-    BEFORE UPDATE ON contract_milestone
-    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 CREATE TABLE IF NOT EXISTS portfolio (
     portfolio_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),

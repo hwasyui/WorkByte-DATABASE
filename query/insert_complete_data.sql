@@ -626,28 +626,7 @@ LIMIT 10
 ON CONFLICT DO NOTHING;
 
 -- ============================================================
--- 19. INSERT CONTRACT MILESTONES (3 milestones per contract)
--- ============================================================
-
-INSERT INTO contract_milestone (
-    contract_id, milestone_title, milestone_description, milestone_percentage,
-    milestone_amount, milestone_order, due_date, status
-)
-SELECT 
-    ct.contract_id,
-    'Phase ' || i || ' Completion',
-    'Complete phase ' || i || ' of the project',
-    (100.00 / 3)::numeric,
-    (ct.agreed_budget / 3)::numeric,
-    i,
-    ct.start_date + (INTERVAL '1 month' * i),
-    CASE WHEN i = 1 THEN 'completed'::milestone_status ELSE 'pending'::milestone_status END
-FROM contract ct
-CROSS JOIN LATERAL generate_series(1, 3) i
-ON CONFLICT DO NOTHING;
-
--- ============================================================
--- 20. INSERT PORTFOLIO (1-2 portfolio items per freelancer)
+-- 19. INSERT PORTFOLIO (1-2 portfolio items per freelancer)
 -- ============================================================
 
 INSERT INTO portfolio (
@@ -858,8 +837,6 @@ UNION ALL
 SELECT 'Proposal Files', COUNT(*) FROM proposal_file
 UNION ALL
 SELECT 'Contracts', COUNT(*) FROM contract
-UNION ALL
-SELECT 'Contract Milestones', COUNT(*) FROM contract_milestone
 UNION ALL
 SELECT 'Portfolio', COUNT(*) FROM portfolio
 UNION ALL

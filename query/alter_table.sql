@@ -79,6 +79,13 @@
 -- ALTER TABLE contract_milestone ADD COLUMN IF NOT EXISTS payment_released         BOOLEAN DEFAULT FALSE;
 -- ALTER TABLE contract_milestone ADD COLUMN IF NOT EXISTS freelancer_confirmed_paid BOOLEAN DEFAULT FALSE;
 
+-- ── Remove contract_milestone, job_milestone, job_payment; add payment_schedule ─
+DROP TABLE IF EXISTS contract_milestone CASCADE;
+DROP TABLE IF EXISTS job_milestone CASCADE;
+DROP TABLE IF EXISTS job_payment CASCADE;
+DROP TYPE IF EXISTS milestone_status CASCADE;
+ALTER TABLE contract_terms ADD COLUMN IF NOT EXISTS payment_schedule TEXT;
+
 -- ── Add contract_terms table ──────────────────────────────────────────────────
 -- CREATE TABLE IF NOT EXISTS contract_terms (
 --     contract_terms_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
