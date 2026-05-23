@@ -16,3 +16,5 @@ pgadmin/
 
 # logs
 *.log
+
+/query/create_admin_account.sql
