@@ -299,15 +299,17 @@ CREATE TABLE IF NOT EXISTS job_role_skill (
 );
 
 CREATE TABLE IF NOT EXISTS job_role_embedding (
-    embedding_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    job_role_id        UUID NOT NULL UNIQUE,
-    job_post_id        UUID NOT NULL,
-    embedding_vector   VECTOR(768),
-    source_text        TEXT,
-    embedding_metadata JSONB,
-    embedding_dirty    BOOLEAN NOT NULL DEFAULT TRUE,
-    created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    embedding_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    job_role_id           UUID NOT NULL UNIQUE,
+    job_post_id           UUID NOT NULL,
+    embedding_vector      VECTOR(768),
+    source_text           TEXT,
+    embedding_metadata    JSONB,
+    embedding_dirty       BOOLEAN NOT NULL DEFAULT TRUE,
+    meta_experience_level VARCHAR(50),
+    meta_role_budget      NUMERIC(15, 2),
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     FOREIGN KEY (job_role_id) REFERENCES job_role(job_role_id) ON DELETE CASCADE,
     FOREIGN KEY (job_post_id) REFERENCES job_post(job_post_id) ON DELETE CASCADE
 );
@@ -319,6 +321,8 @@ CREATE INDEX IF NOT EXISTS idx_job_role_embedding_dirty
     ON job_role_embedding (embedding_dirty) WHERE embedding_dirty = TRUE;
 CREATE INDEX IF NOT EXISTS idx_job_role_embedding_job_role
     ON job_role_embedding (job_role_id) WHERE embedding_vector IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_jre_meta_exp_level
+    ON job_role_embedding (meta_experience_level) WHERE embedding_vector IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS job_file (
     job_file_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -594,11 +598,10 @@ CREATE INDEX IF NOT EXISTS idx_contract_embedding_freelancer
     ON contract_embedding (freelancer_id)
     WHERE embedding_vector IS NOT NULL;
 
--- ── Unified messaging: DM threads ────────────────────────────────────────────
 -- One thread per user pair. contract_id links a thread to a contract.
--- status: 'request' → 1-msg cap on initiator until receiver accepts
---         'active'  → free exchange (set on accept or contract creation)
---         'declined'→ receiver declined
+-- status: 'request' -> 1-msg cap on initiator until receiver accepts
+--         'active'  -> free exchange (set on accept or contract creation)
+--         'declined'-> receiver declined
 
 CREATE TABLE IF NOT EXISTS dm_thread (
     thread_id      UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -642,8 +645,6 @@ CREATE TABLE IF NOT EXISTS dm_message_attachment (
 );
 CREATE INDEX IF NOT EXISTS idx_dm_attachment_message ON dm_message_attachment (dm_message_id);
 
--- ── Contract Submissions ──────────────────────────────────────────────────────
-
 CREATE TABLE IF NOT EXISTS contract_submission (
     submission_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     contract_id     UUID NOT NULL,
@@ -677,15 +678,11 @@ CREATE INDEX IF NOT EXISTS idx_contract_submission_submitted_by
 CREATE INDEX IF NOT EXISTS idx_contract_submission_file_submission_id
     ON contract_submission_file (submission_id);
 
--- ── Review System ENUMs ───────────────────────────────────────────────────────
-
 CREATE TYPE review_status          AS ENUM ('pending', 'published', 'flagged', 'suppressed');
 CREATE TYPE review_sentiment_label AS ENUM ('positive', 'neutral', 'negative');
 CREATE TYPE review_alert_type      AS ENUM ('score_drop', 'spike_in_revisions', 'fake_review_pattern', 'high_conflict_detected');
 CREATE TYPE review_alert_severity  AS ENUM ('low', 'medium', 'high');
 CREATE TYPE trust_snapshot_reason  AS ENUM ('review_published', 'dispute_closed', 'score_recalculated', 'manual_adjustment');
-
--- ── Review Tables ─────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS reviews (
     id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -740,8 +737,6 @@ CREATE TABLE IF NOT EXISTS review_skill_tags (
 
 CREATE INDEX IF NOT EXISTS idx_review_skill_tags_review_id ON review_skill_tags (review_id);
 
--- ── AI Prompt Bank ────────────────────────────────────────────────────────────
-
 CREATE TABLE IF NOT EXISTS ai_review_prompts (
     id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     project_category  VARCHAR(100) NOT NULL,
@@ -752,8 +747,6 @@ CREATE TABLE IF NOT EXISTS ai_review_prompts (
 
 CREATE INDEX IF NOT EXISTS idx_ai_prompts_category ON ai_review_prompts (project_category);
 CREATE INDEX IF NOT EXISTS idx_ai_prompts_active   ON ai_review_prompts (is_active) WHERE is_active = TRUE;
-
--- ── Performance Scoring ───────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS freelancer_performance_scores (
     id                             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -775,8 +768,6 @@ CREATE TABLE IF NOT EXISTS freelancer_performance_scores (
 
 CREATE INDEX IF NOT EXISTS idx_fps_freelancer_id ON freelancer_performance_scores (freelancer_id);
 
--- ── AI Analysis ───────────────────────────────────────────────────────────────
-
 CREATE TABLE IF NOT EXISTS review_ai_analysis (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     review_id           UUID NOT NULL UNIQUE,
@@ -794,8 +785,6 @@ CREATE TABLE IF NOT EXISTS review_ai_analysis (
     CONSTRAINT fk_raa_review FOREIGN KEY (review_id) REFERENCES reviews(id) ON DELETE CASCADE
 );
 
--- ── Bias Detection Log ────────────────────────────────────────────────────────
-
 CREATE TABLE IF NOT EXISTS bias_detection_log (
     id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     freelancer_id            UUID NOT NULL,
@@ -811,8 +800,6 @@ CREATE TABLE IF NOT EXISTS bias_detection_log (
 
 CREATE INDEX IF NOT EXISTS idx_bdl_freelancer_id ON bias_detection_log (freelancer_id);
 CREATE INDEX IF NOT EXISTS idx_bdl_review_id     ON bias_detection_log (review_id);
-
--- ── Trust Score Tables ────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS freelancer_trust_scores (
     id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -861,8 +848,6 @@ CREATE TABLE IF NOT EXISTS red_flag_alerts (
 
 CREATE INDEX IF NOT EXISTS idx_rfa_freelancer_id ON red_flag_alerts (freelancer_id);
 CREATE INDEX IF NOT EXISTS idx_rfa_unresolved    ON red_flag_alerts (freelancer_id, is_resolved) WHERE is_resolved = FALSE;
-
--- ── Moderation & Safety ───────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS report_auto_actions (
     action_id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -925,7 +910,7 @@ CREATE INDEX IF NOT EXISTS idx_htq_status  ON harmful_text_queue (status, create
 CREATE INDEX IF NOT EXISTS idx_htq_content ON harmful_text_queue (content_type, content_id);
 CREATE INDEX IF NOT EXISTS idx_htq_auto    ON harmful_text_queue (auto_approve_at) WHERE status = 'pending';
 
--- Legacy table — messages table was dropped; no FK on message_id
+-- Legacy table; messages table was dropped. No FK on message_id.
 CREATE TABLE IF NOT EXISTS message_attachment (
     attachment_id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     message_id       UUID NOT NULL,

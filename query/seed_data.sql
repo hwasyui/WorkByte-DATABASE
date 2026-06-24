@@ -1,6 +1,4 @@
--- ============================================================
--- WorkByte Platform — Seed Data
--- ============================================================
+-- WorkByte Platform Seed Data
 --
 -- Accounts created by this script:
 --
@@ -21,10 +19,9 @@
 --
 -- This script is safe to re-run: all inserts use ON CONFLICT DO NOTHING
 -- or NOT EXISTS guards to avoid duplicates.
--- ============================================================
 
 
--- ── 1. Users ──────────────────────────────────────────────────────────────────
+-- 1. Users
 
 INSERT INTO users (email, password, is_admin, password_login_enabled, email_verified, email_verified_at)
 VALUES
@@ -43,7 +40,7 @@ VALUES
 ON CONFLICT (email) DO NOTHING;
 
 
--- ── 2. Freelancer profiles ────────────────────────────────────────────────────
+-- 2. Freelancer profiles
 
 INSERT INTO freelancer (user_id, full_name, title, bio, estimated_rate, rate_time, rate_currency)
 SELECT user_id,
@@ -64,7 +61,7 @@ FROM users WHERE email = 'dual@example.com'
 ON CONFLICT (user_id) DO NOTHING;
 
 
--- ── 3. Client profiles ────────────────────────────────────────────────────────
+-- 3. Client profiles
 
 INSERT INTO client (user_id, full_name, bio, website_url)
 SELECT user_id,
@@ -83,7 +80,7 @@ FROM users WHERE email = 'dual@example.com'
 ON CONFLICT (user_id) DO NOTHING;
 
 
--- ── 4. Skills ─────────────────────────────────────────────────────────────────
+-- 4. Skills
 
 INSERT INTO skill (skill_name, skill_category) VALUES
     ('Python',          'hard_skill'),
@@ -99,7 +96,7 @@ INSERT INTO skill (skill_name, skill_category) VALUES
 ON CONFLICT (skill_name) DO NOTHING;
 
 
--- ── 5. Freelancer skills ──────────────────────────────────────────────────────
+-- 5. Freelancer skills
 
 INSERT INTO freelancer_skill (freelancer_id, skill_id, proficiency_level)
 SELECT f.freelancer_id, s.skill_id, 'expert'::proficiency_skill
@@ -129,7 +126,7 @@ WHERE u.email = 'dual@example.com'
 ON CONFLICT (freelancer_id, skill_id) DO NOTHING;
 
 
--- ── 6. Work experience ────────────────────────────────────────────────────────
+-- 6. Work experience
 
 INSERT INTO work_experience (freelancer_id, job_title, company_name, location, start_date, end_date, is_current, description)
 SELECT f.freelancer_id,
@@ -156,7 +153,7 @@ FROM freelancer f JOIN users u ON f.user_id = u.user_id
 WHERE u.email = 'dual@example.com';
 
 
--- ── 7. Education ──────────────────────────────────────────────────────────────
+-- 7. Education
 
 INSERT INTO education (freelancer_id, institution_name, degree, field_of_study, start_date, end_date, is_current, grade)
 SELECT f.freelancer_id,
@@ -173,7 +170,7 @@ FROM freelancer f JOIN users u ON f.user_id = u.user_id
 WHERE u.email = 'dual@example.com';
 
 
--- ── 8. Job posts ──────────────────────────────────────────────────────────────
+-- 8. Job posts
 -- Job 1: posted by client, filled (completed contract)
 -- Job 2: posted by client, filled (active contract)
 -- Job 3: posted by dual as client, active (open for proposals)
@@ -212,7 +209,7 @@ WHERE u.email = 'dual@example.com'
   AND NOT EXISTS (SELECT 1 FROM job_post jp2 JOIN client c2 ON jp2.client_id = c2.client_id JOIN users u2 ON c2.user_id = u2.user_id WHERE u2.email = 'dual@example.com' AND jp2.job_title = 'Mobile App UI Redesign (Figma to Flutter)');
 
 
--- ── 9. Job roles ──────────────────────────────────────────────────────────────
+-- 9. Job roles
 
 INSERT INTO job_role (job_post_id, role_title, role_budget, budget_currency, budget_type, role_description, positions_available, display_order)
 SELECT jp.job_post_id,
@@ -239,7 +236,7 @@ WHERE u.email = 'dual@example.com' AND jp.job_title = 'Mobile App UI Redesign (F
   AND NOT EXISTS (SELECT 1 FROM job_role jr2 WHERE jr2.job_post_id = jp.job_post_id AND jr2.role_title = 'UI/UX Designer');
 
 
--- ── 10. Job role skills ───────────────────────────────────────────────────────
+-- 10. Job role skills
 
 INSERT INTO job_role_skill (job_role_id, skill_id, is_required, importance_level)
 SELECT jr.job_role_id, s.skill_id, TRUE, 'required'::importance_level
@@ -278,7 +275,7 @@ WHERE u.email = 'dual@example.com'
 ON CONFLICT (job_role_id, skill_id) DO NOTHING;
 
 
--- ── 11. Proposals ─────────────────────────────────────────────────────────────
+-- 11. Proposals
 
 -- Job 1: Ryan applies as freelancer, accepted
 INSERT INTO proposal (job_post_id, job_role_id, freelancer_id, cover_letter, proposed_budget, proposed_duration, status, submitted_at)
@@ -317,7 +314,7 @@ WHERE uc.email = 'client@example.com'
 ON CONFLICT (freelancer_id, job_role_id) DO NOTHING;
 
 
--- ── 12. Contracts ─────────────────────────────────────────────────────────────
+-- 12. Contracts
 
 -- Contract 1: completed (Ryan x Nexus Digital)
 INSERT INTO contract (
@@ -330,7 +327,7 @@ INSERT INTO contract (
 )
 SELECT p.job_post_id, p.job_role_id, p.proposal_id,
        p.freelancer_id, c.client_id,
-       'Backend API Development — Nexus Digital SaaS Platform', 'Backend Developer',
+       'Backend API Development - Nexus Digital SaaS Platform', 'Backend Developer',
        5500.00, 'USD', 'full_payment'::payment_structure, '10 weeks',
        'completed'::contract_status,
        (NOW() - INTERVAL '5 months')::date,
@@ -347,7 +344,7 @@ JOIN users uf ON f.user_id = uf.user_id
 WHERE uc.email = 'client@example.com'
   AND jp.job_title = 'Backend API Development for SaaS Platform'
   AND uf.email = 'freelancer@example.com'
-  AND NOT EXISTS (SELECT 1 FROM contract ct2 WHERE ct2.contract_title = 'Backend API Development — Nexus Digital SaaS Platform');
+  AND NOT EXISTS (SELECT 1 FROM contract ct2 WHERE ct2.contract_title = 'Backend API Development - Nexus Digital SaaS Platform');
 
 -- Contract 2: active (Dana as freelancer x Nexus Digital)
 INSERT INTO contract (
@@ -360,7 +357,7 @@ INSERT INTO contract (
 )
 SELECT p.job_post_id, p.job_role_id, p.proposal_id,
        p.freelancer_id, c.client_id,
-       'React Analytics Dashboard — Nexus Digital', 'Frontend Developer',
+       'React Analytics Dashboard - Nexus Digital', 'Frontend Developer',
        3800.00, 'USD', 'full_payment'::payment_structure, '7 weeks',
        'active'::contract_status,
        (NOW() - INTERVAL '6 weeks')::date,
@@ -376,25 +373,25 @@ JOIN users uf ON f.user_id = uf.user_id
 WHERE uc.email = 'client@example.com'
   AND jp.job_title = 'React Frontend for Analytics Dashboard'
   AND uf.email = 'dual@example.com'
-  AND NOT EXISTS (SELECT 1 FROM contract ct2 WHERE ct2.contract_title = 'React Analytics Dashboard — Nexus Digital');
+  AND NOT EXISTS (SELECT 1 FROM contract ct2 WHERE ct2.contract_title = 'React Analytics Dashboard - Nexus Digital');
 
 
--- ── 13. Contract terms ────────────────────────────────────────────────────────
+-- 13. Contract terms
 
 INSERT INTO contract_terms (contract_id, termination_notice, governing_law, confidentiality, revision_rounds, dispute_resolution, payment_schedule)
 SELECT ct.contract_id, 14, 'Indonesia', TRUE, 2, 'negotiation',
        'Full payment upon final delivery and client sign-off.'
-FROM contract ct WHERE ct.contract_title = 'Backend API Development — Nexus Digital SaaS Platform'
+FROM contract ct WHERE ct.contract_title = 'Backend API Development - Nexus Digital SaaS Platform'
 ON CONFLICT (contract_id) DO NOTHING;
 
 INSERT INTO contract_terms (contract_id, termination_notice, governing_law, confidentiality, revision_rounds, dispute_resolution, payment_schedule)
 SELECT ct.contract_id, 7, 'Indonesia', FALSE, 3, 'negotiation',
        'Full payment on delivery and acceptance of all components.'
-FROM contract ct WHERE ct.contract_title = 'React Analytics Dashboard — Nexus Digital'
+FROM contract ct WHERE ct.contract_title = 'React Analytics Dashboard - Nexus Digital'
 ON CONFLICT (contract_id) DO NOTHING;
 
 
--- ── 14. Contract submissions ──────────────────────────────────────────────────
+-- 14. Contract submissions
 
 -- Contract 1 submission: approved (contract is completed)
 INSERT INTO contract_submission (contract_id, submitted_by, note, status, submitted_at, reviewed_at)
@@ -406,7 +403,7 @@ SELECT ct.contract_id, u.user_id,
 FROM contract ct
 JOIN freelancer f ON ct.freelancer_id = f.freelancer_id
 JOIN users u ON f.user_id = u.user_id
-WHERE ct.contract_title = 'Backend API Development — Nexus Digital SaaS Platform'
+WHERE ct.contract_title = 'Backend API Development - Nexus Digital SaaS Platform'
   AND NOT EXISTS (SELECT 1 FROM contract_submission cs2 WHERE cs2.contract_id = ct.contract_id AND cs2.status = 'approved');
 
 -- Contract 2 submission: submitted, awaiting review
@@ -418,21 +415,21 @@ SELECT ct.contract_id, u.user_id,
 FROM contract ct
 JOIN freelancer f ON ct.freelancer_id = f.freelancer_id
 JOIN users u ON f.user_id = u.user_id
-WHERE ct.contract_title = 'React Analytics Dashboard — Nexus Digital'
+WHERE ct.contract_title = 'React Analytics Dashboard - Nexus Digital'
   AND NOT EXISTS (SELECT 1 FROM contract_submission cs2 WHERE cs2.contract_id = ct.contract_id);
 
 
--- ── 15. Rating (completed contract) ──────────────────────────────────────────
+-- 15. Rating (completed contract)
 
 INSERT INTO rating (contract_id, client_id, freelancer_id, communication_score, result_quality_score, professionalism_score, timeline_compliance_score, overall_rating, review_text)
 SELECT ct.contract_id, ct.client_id, ct.freelancer_id,
        5, 5, 5, 4, 4.75,
        'Ryan delivered exactly what we needed. The API is clean, well-documented, and handles edge cases properly. Slight delay on one milestone but communicated proactively throughout.'
-FROM contract ct WHERE ct.contract_title = 'Backend API Development — Nexus Digital SaaS Platform'
+FROM contract ct WHERE ct.contract_title = 'Backend API Development - Nexus Digital SaaS Platform'
 ON CONFLICT (contract_id) DO NOTHING;
 
 
--- ── 16. Review (completed contract) ──────────────────────────────────────────
+-- 16. Review (completed contract)
 
 INSERT INTO reviews (contract_id, reviewer_id, freelancer_id, inferred_category, status, is_anonymous, published_at)
 SELECT ct.contract_id, uc.user_id, uf.user_id,
@@ -443,31 +440,31 @@ JOIN client cl ON ct.client_id = cl.client_id
 JOIN users uc ON cl.user_id = uc.user_id
 JOIN freelancer f ON ct.freelancer_id = f.freelancer_id
 JOIN users uf ON f.user_id = uf.user_id
-WHERE ct.contract_title = 'Backend API Development — Nexus Digital SaaS Platform'
+WHERE ct.contract_title = 'Backend API Development - Nexus Digital SaaS Platform'
 ON CONFLICT (contract_id) DO NOTHING;
 
 INSERT INTO review_ratings (review_id, category, score)
 SELECT r.id, 'communication', 4.5
 FROM reviews r JOIN contract ct ON r.contract_id = ct.contract_id
-WHERE ct.contract_title = 'Backend API Development — Nexus Digital SaaS Platform'
+WHERE ct.contract_title = 'Backend API Development - Nexus Digital SaaS Platform'
 ON CONFLICT (review_id, category) DO NOTHING;
 
 INSERT INTO review_ratings (review_id, category, score)
 SELECT r.id, 'work_quality', 5.0
 FROM reviews r JOIN contract ct ON r.contract_id = ct.contract_id
-WHERE ct.contract_title = 'Backend API Development — Nexus Digital SaaS Platform'
+WHERE ct.contract_title = 'Backend API Development - Nexus Digital SaaS Platform'
 ON CONFLICT (review_id, category) DO NOTHING;
 
 INSERT INTO review_ratings (review_id, category, score)
 SELECT r.id, 'professionalism', 5.0
 FROM reviews r JOIN contract ct ON r.contract_id = ct.contract_id
-WHERE ct.contract_title = 'Backend API Development — Nexus Digital SaaS Platform'
+WHERE ct.contract_title = 'Backend API Development - Nexus Digital SaaS Platform'
 ON CONFLICT (review_id, category) DO NOTHING;
 
 INSERT INTO review_ratings (review_id, category, score)
 SELECT r.id, 'timeline', 4.0
 FROM reviews r JOIN contract ct ON r.contract_id = ct.contract_id
-WHERE ct.contract_title = 'Backend API Development — Nexus Digital SaaS Platform'
+WHERE ct.contract_title = 'Backend API Development - Nexus Digital SaaS Platform'
 ON CONFLICT (review_id, category) DO NOTHING;
 
 INSERT INTO review_written_content (review_id, ai_question, client_answer, overall_comment)
@@ -476,39 +473,39 @@ SELECT r.id,
        'Ryan kept us updated every week and flagged a scope ambiguity early that saved us from a significant rework later. One deadline slipped by a few days but he was upfront about it.',
        'Solid developer with strong technical fundamentals. Would hire again for backend work.'
 FROM reviews r JOIN contract ct ON r.contract_id = ct.contract_id
-WHERE ct.contract_title = 'Backend API Development — Nexus Digital SaaS Platform'
+WHERE ct.contract_title = 'Backend API Development - Nexus Digital SaaS Platform'
 ON CONFLICT (review_id) DO NOTHING;
 
 INSERT INTO review_skill_tags (review_id, skill_tag, is_ai_suggested)
 SELECT r.id, 'Python', FALSE FROM reviews r JOIN contract ct ON r.contract_id = ct.contract_id
-WHERE ct.contract_title = 'Backend API Development — Nexus Digital SaaS Platform'
+WHERE ct.contract_title = 'Backend API Development - Nexus Digital SaaS Platform'
 ON CONFLICT (review_id, skill_tag) DO NOTHING;
 
 INSERT INTO review_skill_tags (review_id, skill_tag, is_ai_suggested)
 SELECT r.id, 'FastAPI', TRUE FROM reviews r JOIN contract ct ON r.contract_id = ct.contract_id
-WHERE ct.contract_title = 'Backend API Development — Nexus Digital SaaS Platform'
+WHERE ct.contract_title = 'Backend API Development - Nexus Digital SaaS Platform'
 ON CONFLICT (review_id, skill_tag) DO NOTHING;
 
 INSERT INTO review_skill_tags (review_id, skill_tag, is_ai_suggested)
 SELECT r.id, 'Communication', FALSE FROM reviews r JOIN contract ct ON r.contract_id = ct.contract_id
-WHERE ct.contract_title = 'Backend API Development — Nexus Digital SaaS Platform'
+WHERE ct.contract_title = 'Backend API Development - Nexus Digital SaaS Platform'
 ON CONFLICT (review_id, skill_tag) DO NOTHING;
 
 
--- ── 17. Portfolio (auto-generated from completed contract) ───────────────────
+-- 17. Portfolio (auto-generated from completed contract)
 
 INSERT INTO portfolio (freelancer_id, project_title, project_description, completion_date, is_auto_generated, contract_id)
 SELECT ct.freelancer_id,
-       'Backend API — Nexus Digital SaaS Platform',
+       'Backend API - Nexus Digital SaaS Platform',
        'Designed and implemented a production-grade RESTful API for a SaaS platform covering user authentication, subscription management, and a reporting module. Built with Python/FastAPI and PostgreSQL.',
        ct.actual_completion_date,
        TRUE, ct.contract_id
 FROM contract ct
-WHERE ct.contract_title = 'Backend API Development — Nexus Digital SaaS Platform'
+WHERE ct.contract_title = 'Backend API Development - Nexus Digital SaaS Platform'
   AND NOT EXISTS (SELECT 1 FROM portfolio p2 WHERE p2.contract_id = ct.contract_id);
 
 
--- ── 18. Freelancer embedding stubs (sweep worker populates vectors) ───────────
+-- 18. Freelancer embedding stubs (sweep worker populates vectors)
 
 INSERT INTO freelancer_embedding (freelancer_id, embedding_dirty)
 SELECT f.freelancer_id, TRUE
@@ -517,15 +514,15 @@ WHERE u.email IN ('freelancer@example.com', 'dual@example.com')
 ON CONFLICT (freelancer_id) DO NOTHING;
 
 
--- ── 19. Contract embedding stub for completed contract ────────────────────────
+-- 19. Contract embedding stub for completed contract
 
 INSERT INTO contract_embedding (contract_id, freelancer_id, embedding_dirty)
 SELECT ct.contract_id, ct.freelancer_id, TRUE
-FROM contract ct WHERE ct.contract_title = 'Backend API Development — Nexus Digital SaaS Platform'
+FROM contract ct WHERE ct.contract_title = 'Backend API Development - Nexus Digital SaaS Platform'
 ON CONFLICT (contract_id) DO NOTHING;
 
 
--- ── 20. DM thread and messages (client <-> freelancer, Contract 1) ────────────
+-- 20. DM thread and messages (client <-> freelancer, Contract 1)
 
 -- dm_thread enforces user_a_id < user_b_id (UUID lexicographic order)
 INSERT INTO dm_thread (user_a_id, user_b_id, initiator_id, status, contract_id)
@@ -539,7 +536,7 @@ JOIN client cl ON ct.client_id = cl.client_id
 JOIN users uc ON cl.user_id = uc.user_id
 JOIN freelancer f ON ct.freelancer_id = f.freelancer_id
 JOIN users uf ON f.user_id = uf.user_id
-WHERE ct.contract_title = 'Backend API Development — Nexus Digital SaaS Platform'
+WHERE ct.contract_title = 'Backend API Development - Nexus Digital SaaS Platform'
 ON CONFLICT (user_a_id, user_b_id) DO NOTHING;
 
 INSERT INTO dm_message (thread_id, sender_id, message_text, is_read, read_at, sent_at)
@@ -550,7 +547,7 @@ FROM dm_thread t
 JOIN contract ct ON t.contract_id = ct.contract_id
 JOIN client cl ON ct.client_id = cl.client_id
 JOIN users uc ON cl.user_id = uc.user_id
-WHERE ct.contract_title = 'Backend API Development — Nexus Digital SaaS Platform'
+WHERE ct.contract_title = 'Backend API Development - Nexus Digital SaaS Platform'
   AND NOT EXISTS (SELECT 1 FROM dm_message m2 WHERE m2.thread_id = t.thread_id);
 
 INSERT INTO dm_message (thread_id, sender_id, message_text, is_read, read_at, sent_at)
@@ -561,7 +558,7 @@ FROM dm_thread t
 JOIN contract ct ON t.contract_id = ct.contract_id
 JOIN freelancer f ON ct.freelancer_id = f.freelancer_id
 JOIN users uf ON f.user_id = uf.user_id
-WHERE ct.contract_title = 'Backend API Development — Nexus Digital SaaS Platform'
+WHERE ct.contract_title = 'Backend API Development - Nexus Digital SaaS Platform'
   AND (SELECT COUNT(*) FROM dm_message m2 WHERE m2.thread_id = t.thread_id) = 1;
 
 INSERT INTO dm_message (thread_id, sender_id, message_text, is_read, read_at, sent_at)
@@ -572,5 +569,5 @@ FROM dm_thread t
 JOIN contract ct ON t.contract_id = ct.contract_id
 JOIN client cl ON ct.client_id = cl.client_id
 JOIN users uc ON cl.user_id = uc.user_id
-WHERE ct.contract_title = 'Backend API Development — Nexus Digital SaaS Platform'
+WHERE ct.contract_title = 'Backend API Development - Nexus Digital SaaS Platform'
   AND (SELECT COUNT(*) FROM dm_message m2 WHERE m2.thread_id = t.thread_id) = 2;

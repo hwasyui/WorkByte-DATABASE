@@ -277,6 +277,8 @@ public      |job_role_embedding           |embedding_metadata           |jsonb  
 public      |job_role_embedding           |embedding_dirty              |boolean                    |NO         |true                                     |
 public      |job_role_embedding           |created_at                   |timestamp with time zone   |NO         |now()                                    |
 public      |job_role_embedding           |updated_at                   |timestamp with time zone   |NO         |now()                                    |
+public      |job_role_embedding           |meta_experience_level        |character varying          |YES        |                                         |
+public      |job_role_embedding           |meta_role_budget             |numeric                    |YES        |                                         |
 public      |job_role_skill               |job_role_skill_id            |uuid                       |NO         |gen_random_uuid()                        |
 public      |job_role_skill               |job_role_id                  |uuid                       |NO         |                                         |
 public      |job_role_skill               |skill_id                     |uuid                       |NO         |                                         |
