@@ -16,3 +16,5 @@ pgadmin/
 
 # logs
 *.log
+
+docker-compose.yml

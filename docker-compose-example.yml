@@ -1,0 +1,41 @@
+services:
+  capstone-postgresql:
+    image: pgvector/pgvector:pg18
+    container_name: capstone-postgresql
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: your_db_user
+      POSTGRES_PASSWORD: your_db_password
+      POSTGRES_DB: your_db_name
+      TZ: Asia/Jakarta
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - ./data:/var/lib/postgresql
+      - ./query:/query
+    networks:
+      - capstone-network
+
+  capstone-postgregui:
+    image: dpage/pgadmin4:9.12.0
+    container_name: capstone-postgregui
+    restart: unless-stopped
+    user: root
+    environment:
+      PGADMIN_DEFAULT_EMAIL: your_email@example.com
+      PGADMIN_DEFAULT_PASSWORD: your_pgadmin_password
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: 'False'
+      TZ: Asia/Jakarta
+    ports:
+      - "127.0.0.1:8080:80"
+    volumes:
+      - ./pgadmin:/var/lib/pgadmin
+    depends_on:
+      - capstone-postgresql
+    networks:
+      - capstone-network
+
+networks:
+  capstone-network:
+    external: true
