@@ -83,16 +83,101 @@ ON CONFLICT (user_id) DO NOTHING;
 -- 4. Skills
 
 INSERT INTO skill (skill_name, skill_category) VALUES
-    ('Python',          'hard_skill'),
-    ('FastAPI',         'hard_skill'),
-    ('PostgreSQL',      'hard_skill'),
-    ('React',           'hard_skill'),
-    ('REST API',        'hard_skill'),
-    ('Docker',          'hard_skill'),
-    ('Figma',           'tool'),
-    ('TypeScript',      'hard_skill'),
-    ('Communication',   'soft_skill'),
-    ('Problem Solving', 'soft_skill')
+    -- Programming Languages
+    ('Python',              'hard_skill'),
+    ('JavaScript',          'hard_skill'),
+    ('TypeScript',          'hard_skill'),
+    ('Java',                'hard_skill'),
+    ('Kotlin',              'hard_skill'),
+    ('Swift',               'hard_skill'),
+    ('Go',                  'hard_skill'),
+    ('PHP',                 'hard_skill'),
+    ('Ruby',                'hard_skill'),
+    ('C++',                 'hard_skill'),
+    ('C#',                  'hard_skill'),
+    ('Dart',                'hard_skill'),
+    ('Rust',                'hard_skill'),
+    -- Backend Frameworks & APIs
+    ('FastAPI',             'hard_skill'),
+    ('Django',              'hard_skill'),
+    ('Flask',               'hard_skill'),
+    ('Node.js',             'hard_skill'),
+    ('Express.js',          'hard_skill'),
+    ('Spring Boot',         'hard_skill'),
+    ('Laravel',             'hard_skill'),
+    ('REST API',            'hard_skill'),
+    ('GraphQL',             'hard_skill'),
+    -- Frontend Frameworks & Libraries
+    ('React',               'hard_skill'),
+    ('Vue.js',              'hard_skill'),
+    ('Angular',             'hard_skill'),
+    ('Next.js',             'hard_skill'),
+    ('HTML/CSS',            'hard_skill'),
+    ('Tailwind CSS',        'hard_skill'),
+    -- Mobile
+    ('Flutter',             'hard_skill'),
+    ('React Native',        'hard_skill'),
+    ('Android Development', 'hard_skill'),
+    ('iOS Development',     'hard_skill'),
+    -- Databases
+    ('PostgreSQL',          'hard_skill'),
+    ('MySQL',               'hard_skill'),
+    ('MongoDB',             'hard_skill'),
+    ('Redis',               'hard_skill'),
+    ('Firebase',            'hard_skill'),
+    ('Supabase',            'hard_skill'),
+    ('SQL',                 'hard_skill'),
+    -- DevOps & Cloud
+    ('Docker',              'hard_skill'),
+    ('Kubernetes',          'hard_skill'),
+    ('AWS',                 'hard_skill'),
+    ('GCP',                 'hard_skill'),
+    ('Azure',               'hard_skill'),
+    ('CI/CD',               'hard_skill'),
+    ('Linux',               'hard_skill'),
+    ('Git',                 'tool'),
+    -- Data & AI / ML
+    ('Machine Learning',    'hard_skill'),
+    ('Data Analysis',       'hard_skill'),
+    ('TensorFlow',          'hard_skill'),
+    ('PyTorch',             'hard_skill'),
+    ('Pandas',              'hard_skill'),
+    ('Power BI',            'tool'),
+    ('Tableau',             'tool'),
+    -- Design
+    ('UI/UX Design',        'hard_skill'),
+    ('Graphic Design',      'hard_skill'),
+    ('Wireframing',         'hard_skill'),
+    ('Prototyping',         'hard_skill'),
+    ('Figma',               'tool'),
+    ('Adobe XD',            'tool'),
+    ('Sketch',              'tool'),
+    ('Photoshop',           'tool'),
+    ('Illustrator',         'tool'),
+    ('After Effects',       'tool'),
+    ('Premiere Pro',        'tool'),
+    -- Writing & Marketing
+    ('Copywriting',         'hard_skill'),
+    ('SEO',                 'hard_skill'),
+    ('Content Writing',     'hard_skill'),
+    ('Social Media Marketing', 'hard_skill'),
+    ('Digital Marketing',   'hard_skill'),
+    -- Project Tools
+    ('Jira',                'tool'),
+    ('Notion',              'tool'),
+    ('Trello',              'tool'),
+    ('Postman',             'tool'),
+    -- Soft Skills
+    ('Communication',       'soft_skill'),
+    ('Problem Solving',     'soft_skill'),
+    ('Teamwork',            'soft_skill'),
+    ('Leadership',          'soft_skill'),
+    ('Project Management',  'soft_skill'),
+    ('Time Management',     'soft_skill'),
+    ('Critical Thinking',   'soft_skill'),
+    ('Adaptability',        'soft_skill'),
+    ('Creativity',          'soft_skill'),
+    ('Attention to Detail', 'soft_skill')
 ON CONFLICT (skill_name) DO NOTHING;
 
 
@@ -571,3 +656,79 @@ JOIN client cl ON ct.client_id = cl.client_id
 JOIN users uc ON cl.user_id = uc.user_id
 WHERE ct.contract_title = 'Backend API Development - Nexus Digital SaaS Platform'
   AND (SELECT COUNT(*) FROM dm_message m2 WHERE m2.thread_id = t.thread_id) = 2;
+
+
+-- 21. Job role embedding stubs (sweep worker populates vectors)
+-- Created here because seeding bypasses the API that normally calls mark_job_dirty().
+
+INSERT INTO job_role_embedding (job_role_id, job_post_id, embedding_dirty)
+SELECT jr.job_role_id, jr.job_post_id, TRUE
+FROM job_role jr
+JOIN job_post jp ON jr.job_post_id = jp.job_post_id
+JOIN client c ON jp.client_id = c.client_id
+JOIN users u ON c.user_id = u.user_id
+WHERE (u.email = 'client@example.com' AND jp.job_title IN (
+           'Backend API Development for SaaS Platform',
+           'React Frontend for Analytics Dashboard'
+       ))
+   OR (u.email = 'dual@example.com' AND jp.job_title = 'Mobile App UI Redesign (Figma to Flutter)')
+ON CONFLICT (job_role_id) DO NOTHING;
+
+
+-- 22. AI review prompts (category-specific questions for the post-completion review pipeline)
+-- Categories must match review_pipeline.infer_project_category() output.
+-- get_targeted_question() picks one at random per category; 'general' is the fallback.
+
+INSERT INTO ai_review_prompts (project_category, question_text, is_active) VALUES
+
+    -- general (fallback for anything unclassified)
+    ('general', 'How satisfied are you with the overall quality and outcome of the project?', TRUE),
+    ('general', 'Did the freelancer meet your expectations in terms of deliverables and professionalism?', TRUE),
+    ('general', 'How well did the freelancer understand and address your project requirements?', TRUE),
+
+    -- backend_dev
+    ('backend_dev', 'How would you rate the quality, structure, and maintainability of the code delivered?', TRUE),
+    ('backend_dev', 'Did the freelancer handle edge cases, error handling, and API reliability to your satisfaction?', TRUE),
+    ('backend_dev', 'How effectively did the freelancer communicate technical decisions and any blockers during the project?', TRUE),
+
+    -- web_dev
+    ('web_dev', 'How satisfied are you with the responsiveness, performance, and visual accuracy of the delivered frontend?', TRUE),
+    ('web_dev', 'Did the freelancer follow your design specifications and browser compatibility requirements?', TRUE),
+    ('web_dev', 'How well did the freelancer collaborate with you on feedback rounds and UI revisions?', TRUE),
+
+    -- mobile_dev
+    ('mobile_dev', 'How would you rate the performance, stability, and user experience of the delivered mobile app?', TRUE),
+    ('mobile_dev', 'Did the freelancer test the app across the required devices and OS versions?', TRUE),
+    ('mobile_dev', 'How satisfied are you with how the freelancer handled platform-specific constraints (Android/iOS)?', TRUE),
+
+    -- ui_ux_design
+    ('ui_ux_design', 'How well did the freelancer translate your goals into an intuitive and visually appealing design?', TRUE),
+    ('ui_ux_design', 'Did the delivered Figma files or prototypes meet your handoff and usability requirements?', TRUE),
+    ('ui_ux_design', 'How effectively did the freelancer incorporate your feedback into the design iterations?', TRUE),
+
+    -- graphic_design
+    ('graphic_design', 'How satisfied are you with the creativity and visual quality of the delivered design assets?', TRUE),
+    ('graphic_design', 'Did the freelancer deliver the assets in the correct formats and resolutions for your use case?', TRUE),
+    ('graphic_design', 'How well did the freelancer understand and represent your brand identity in the work?', TRUE),
+
+    -- copywriting
+    ('copywriting', 'How well did the content align with your brand voice, target audience, and messaging goals?', TRUE),
+    ('copywriting', 'Did the freelancer deliver the copy on time and incorporate your revision requests effectively?', TRUE),
+    ('copywriting', 'How satisfied are you with the clarity, engagement level, and originality of the written content?', TRUE),
+
+    -- data_analytics
+    ('data_analytics', 'How clearly and accurately did the freelancer present the data insights and findings?', TRUE),
+    ('data_analytics', 'Did the deliverables (dashboards, reports, models) meet your analytical requirements?', TRUE),
+    ('data_analytics', 'How well did the freelancer handle data quality issues and communicate assumptions made?', TRUE),
+
+    -- video_editing
+    ('video_editing', 'How satisfied are you with the pacing, visual quality, and overall storytelling of the final video?', TRUE),
+    ('video_editing', 'Did the freelancer incorporate your feedback and revision requests in a timely manner?', TRUE),
+    ('video_editing', 'How well did the freelancer match the tone and style you requested for the project?', TRUE),
+
+    -- marketing
+    ('marketing', 'How effectively did the freelancer plan and execute the marketing strategy for your goals?', TRUE),
+    ('marketing', 'Did the campaign or content delivered meet your target KPIs and audience engagement expectations?', TRUE),
+    ('marketing', 'How satisfied are you with the freelancer''s understanding of your market and brand positioning?', TRUE)
+
+ON CONFLICT DO NOTHING;
