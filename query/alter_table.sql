@@ -494,4 +494,10 @@
 
 -- toxicity_queue is a dead legacy table (renamed origin of harmful_text_queue).
 -- The backend exclusively uses harmful_text_queue; toxicity_queue is safe to drop.
-DROP TABLE IF EXISTS toxicity_queue CASCADE;
+-- DROP TABLE IF EXISTS toxicity_queue CASCADE;
+
+-- Legacy table from before the DM system was built; messages table no longer exists.
+-- DROP TABLE IF EXISTS message_attachment CASCADE;
+
+-- Dev-era table, never used in production.
+-- DROP TABLE IF EXISTS testing_table CASCADE;

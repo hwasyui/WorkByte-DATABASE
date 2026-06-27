@@ -909,21 +909,3 @@ CREATE TABLE IF NOT EXISTS harmful_text_queue (
 CREATE INDEX IF NOT EXISTS idx_htq_status  ON harmful_text_queue (status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_htq_content ON harmful_text_queue (content_type, content_id);
 CREATE INDEX IF NOT EXISTS idx_htq_auto    ON harmful_text_queue (auto_approve_at) WHERE status = 'pending';
-
--- Legacy table; messages table was dropped. No FK on message_id.
-CREATE TABLE IF NOT EXISTS message_attachment (
-    attachment_id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    message_id       UUID NOT NULL,
-    file_name        TEXT NOT NULL,
-    file_url         TEXT NOT NULL,
-    file_type        TEXT NOT NULL,
-    mime_type        TEXT NOT NULL,
-    file_size_bytes  INTEGER,
-    duration_seconds DOUBLE PRECISION,
-    created_at       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS testing_table (
-    id          SERIAL PRIMARY KEY,
-    description TEXT
-);
