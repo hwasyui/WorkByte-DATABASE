@@ -463,6 +463,16 @@ CREATE INDEX IF NOT EXISTS idx_portfolio_embedding_dirty
 CREATE INDEX IF NOT EXISTS idx_portfolio_embedding_freelancer
     ON portfolio_embedding (freelancer_id) WHERE embedding_vector IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS portfolio_skill (
+    portfolio_skill_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    portfolio_id       UUID NOT NULL,
+    skill_id           UUID NOT NULL,
+    created_at         TIMESTAMP DEFAULT NOW(),
+    UNIQUE (portfolio_id, skill_id),
+    FOREIGN KEY (portfolio_id) REFERENCES portfolio(portfolio_id) ON DELETE CASCADE,
+    FOREIGN KEY (skill_id)     REFERENCES skill(skill_id)         ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS saved_job (
     saved_job_id  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     freelancer_id UUID NOT NULL,

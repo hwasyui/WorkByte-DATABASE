@@ -501,3 +501,14 @@
 
 -- Dev-era table, never used in production.
 -- DROP TABLE IF EXISTS testing_table CASCADE;
+
+-- tracks which skills a freelancer tagged on a specific portfolio item, mirrors freelancer_skill
+CREATE TABLE IF NOT EXISTS portfolio_skill (
+    portfolio_skill_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    portfolio_id       UUID NOT NULL,
+    skill_id           UUID NOT NULL,
+    created_at         TIMESTAMP DEFAULT NOW(),
+    UNIQUE (portfolio_id, skill_id),
+    FOREIGN KEY (portfolio_id) REFERENCES portfolio(portfolio_id) ON DELETE CASCADE,
+    FOREIGN KEY (skill_id)     REFERENCES skill(skill_id)         ON DELETE CASCADE
+);
