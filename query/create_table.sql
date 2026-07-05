@@ -346,7 +346,10 @@ CREATE TABLE IF NOT EXISTS proposal (
     status            proposal_status NOT NULL,
     is_ai_generated   BOOLEAN DEFAULT FALSE,
     submitted_at      TIMESTAMP DEFAULT NOW(),
+    moderation_status TEXT NOT NULL DEFAULT 'visible',
+    scanned_at        TIMESTAMPTZ,
     UNIQUE (freelancer_id, job_role_id),
+    CHECK (moderation_status IN ('scanning', 'visible', 'blocked')),
     FOREIGN KEY (job_post_id)   REFERENCES job_post(job_post_id)     ON DELETE CASCADE,
     FOREIGN KEY (job_role_id)   REFERENCES job_role(job_role_id)     ON DELETE SET NULL,
     FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE
@@ -462,16 +465,6 @@ CREATE INDEX IF NOT EXISTS idx_portfolio_embedding_dirty
     ON portfolio_embedding (embedding_dirty) WHERE embedding_dirty = TRUE;
 CREATE INDEX IF NOT EXISTS idx_portfolio_embedding_freelancer
     ON portfolio_embedding (freelancer_id) WHERE embedding_vector IS NOT NULL;
-
-CREATE TABLE IF NOT EXISTS portfolio_skill (
-    portfolio_skill_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    portfolio_id       UUID NOT NULL,
-    skill_id           UUID NOT NULL,
-    created_at         TIMESTAMP DEFAULT NOW(),
-    UNIQUE (portfolio_id, skill_id),
-    FOREIGN KEY (portfolio_id) REFERENCES portfolio(portfolio_id) ON DELETE CASCADE,
-    FOREIGN KEY (skill_id)     REFERENCES skill(skill_id)         ON DELETE CASCADE
-);
 
 CREATE TABLE IF NOT EXISTS saved_job (
     saved_job_id  UUID PRIMARY KEY DEFAULT gen_random_uuid(),

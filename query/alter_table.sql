@@ -502,13 +502,10 @@
 -- Dev-era table, never used in production.
 -- DROP TABLE IF EXISTS testing_table CASCADE;
 
--- tracks which skills a freelancer tagged on a specific portfolio item, mirrors freelancer_skill
-CREATE TABLE IF NOT EXISTS portfolio_skill (
-    portfolio_skill_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    portfolio_id       UUID NOT NULL,
-    skill_id           UUID NOT NULL,
-    created_at         TIMESTAMP DEFAULT NOW(),
-    UNIQUE (portfolio_id, skill_id),
-    FOREIGN KEY (portfolio_id) REFERENCES portfolio(portfolio_id) ON DELETE CASCADE,
-    FOREIGN KEY (skill_id)     REFERENCES skill(skill_id)         ON DELETE CASCADE
-);
+-- DROP TABLE IF EXISTS portfolio_skill CASCADE;
+
+-- proposal moderation moves to post-moderation: row stays, edited in place, cycles through this status
+-- ALTER TABLE proposal ADD COLUMN IF NOT EXISTS moderation_status TEXT NOT NULL DEFAULT 'visible';
+-- ALTER TABLE proposal ADD COLUMN IF NOT EXISTS scanned_at TIMESTAMPTZ;
+-- ALTER TABLE proposal ADD CONSTRAINT proposal_moderation_status_check
+    -- CHECK (moderation_status IN ('scanning', 'visible', 'blocked'));
