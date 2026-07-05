@@ -306,8 +306,6 @@ CREATE TABLE IF NOT EXISTS job_role_embedding (
     source_text           TEXT,
     embedding_metadata    JSONB,
     embedding_dirty       BOOLEAN NOT NULL DEFAULT TRUE,
-    meta_experience_level VARCHAR(50),
-    meta_role_budget      NUMERIC(15, 2),
     created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     FOREIGN KEY (job_role_id) REFERENCES job_role(job_role_id) ON DELETE CASCADE,
@@ -321,8 +319,6 @@ CREATE INDEX IF NOT EXISTS idx_job_role_embedding_dirty
     ON job_role_embedding (embedding_dirty) WHERE embedding_dirty = TRUE;
 CREATE INDEX IF NOT EXISTS idx_job_role_embedding_job_role
     ON job_role_embedding (job_role_id) WHERE embedding_vector IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_jre_meta_exp_level
-    ON job_role_embedding (meta_experience_level) WHERE embedding_vector IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS job_file (
     job_file_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

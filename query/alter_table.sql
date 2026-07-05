@@ -509,3 +509,13 @@
 -- ALTER TABLE proposal ADD COLUMN IF NOT EXISTS scanned_at TIMESTAMPTZ;
 -- ALTER TABLE proposal ADD CONSTRAINT proposal_moderation_status_check
     -- CHECK (moderation_status IN ('scanning', 'visible', 'blocked'));
+
+-- meta_experience_level/meta_role_budget on job_role_embedding were scaffolded for a
+-- pre-filtered ANN design on /job-posts/relevant (filter candidate roles by experience/budget
+-- before running cosine similarity). Confirmed via code audit that nothing ever reads either
+-- column - /job-posts/relevant only pre-filters on status/category. Dropping as dead weight;
+-- no other embedding table (freelancer_embedding, contract_embedding, portfolio_embedding)
+-- carries anything like this, so it wasn't a general schema pattern either.
+-- DROP INDEX IF EXISTS idx_jre_meta_exp_level;
+-- ALTER TABLE job_role_embedding DROP COLUMN IF EXISTS meta_experience_level;
+-- ALTER TABLE job_role_embedding DROP COLUMN IF EXISTS meta_role_budget;
