@@ -173,6 +173,9 @@ CREATE TABLE IF NOT EXISTS work_experience (
     description        TEXT,
     created_at         TIMESTAMP DEFAULT NOW(),
     updated_at         TIMESTAMP DEFAULT NOW(),
+    moderation_status  TEXT NOT NULL DEFAULT 'scanning',
+    scanned_at         TIMESTAMPTZ,
+    CHECK (moderation_status IN ('scanning', 'visible', 'blocked')),
     FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE
 );
 
@@ -193,6 +196,9 @@ CREATE TABLE IF NOT EXISTS education (
     description       TEXT,
     created_at        TIMESTAMP DEFAULT NOW(),
     updated_at        TIMESTAMP DEFAULT NOW(),
+    moderation_status TEXT NOT NULL DEFAULT 'scanning',
+    scanned_at        TIMESTAMPTZ,
+    CHECK (moderation_status IN ('scanning', 'visible', 'blocked')),
     FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE
 );
 
@@ -222,6 +228,9 @@ CREATE TABLE IF NOT EXISTS job_post (
     project_category   VARCHAR(100) DEFAULT 'general',
     closure_reason     TEXT,
     closure_note       TEXT,
+    moderation_status  TEXT NOT NULL DEFAULT 'scanning',
+    scanned_at         TIMESTAMPTZ,
+    CHECK (moderation_status IN ('scanning', 'visible', 'blocked')),
     FOREIGN KEY (client_id) REFERENCES client(client_id) ON DELETE CASCADE
 );
 
@@ -425,6 +434,9 @@ CREATE TABLE IF NOT EXISTS portfolio (
     contract_id         UUID,
     created_at          TIMESTAMP DEFAULT NOW(),
     updated_at          TIMESTAMP DEFAULT NOW(),
+    moderation_status   TEXT NOT NULL DEFAULT 'scanning',
+    scanned_at          TIMESTAMPTZ,
+    CHECK (moderation_status IN ('scanning', 'visible', 'blocked')),
     FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE,
     FOREIGN KEY (contract_id)   REFERENCES contract(contract_id)     ON DELETE SET NULL
 );
@@ -602,11 +614,17 @@ CREATE INDEX IF NOT EXISTS idx_contract_embedding_freelancer
 --         'active'  -> free exchange (set on accept or contract creation)
 --         'declined'-> receiver declined
 
+-- user_a_id/user_b_id/initiator_id/sender_id (below) are nullable with ON DELETE SET
+-- NULL rather than CASCADE: deleting one side of a thread must not destroy the other
+-- party's copy of the conversation. A thread/message with a NULL user side means that
+-- participant deleted their account; the row is anonymized, not gone. Only once BOTH
+-- sides of a thread are NULL (both participants deleted) does application code purge
+-- the thread outright - see UserFunctions.delete_user().
 CREATE TABLE IF NOT EXISTS dm_thread (
     thread_id      UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_a_id      UUID        NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-    user_b_id      UUID        NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-    initiator_id   UUID        NOT NULL REFERENCES users(user_id),
+    user_a_id      UUID        REFERENCES users(user_id) ON DELETE SET NULL,
+    user_b_id      UUID        REFERENCES users(user_id) ON DELETE SET NULL,
+    initiator_id   UUID        REFERENCES users(user_id) ON DELETE SET NULL,
     status         TEXT        NOT NULL DEFAULT 'request',
     job_post_id    UUID        REFERENCES job_post(job_post_id) ON DELETE SET NULL,
     contract_id    UUID        REFERENCES contract(contract_id) ON DELETE SET NULL,
@@ -622,7 +640,7 @@ CREATE INDEX IF NOT EXISTS idx_dm_thread_contract ON dm_thread (contract_id) WHE
 CREATE TABLE IF NOT EXISTS dm_message (
     dm_message_id  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     thread_id      UUID        NOT NULL REFERENCES dm_thread(thread_id) ON DELETE CASCADE,
-    sender_id      UUID        NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    sender_id      UUID        REFERENCES users(user_id) ON DELETE SET NULL,
     message_text   TEXT        NOT NULL DEFAULT '',
     metadata       TEXT,
     is_read        BOOLEAN     NOT NULL DEFAULT FALSE,
@@ -897,14 +915,12 @@ CREATE TABLE IF NOT EXISTS harmful_text_queue (
     identity_hate_score  DOUBLE PRECISION NOT NULL DEFAULT 0,
     detected_labels      JSONB NOT NULL DEFAULT '[]',
     flagged_text         TEXT,
-    status               TEXT NOT NULL DEFAULT 'pending',
     admin_user_id        UUID,
     admin_note           TEXT,
-    actioned_at          TIMESTAMP,
-    auto_approve_at      TIMESTAMP NOT NULL,
+    reviewed_at          TIMESTAMP,
     created_at           TIMESTAMP DEFAULT NOW(),
-    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+    FOREIGN KEY (admin_user_id) REFERENCES users(user_id) ON DELETE SET NULL
 );
-CREATE INDEX IF NOT EXISTS idx_htq_status  ON harmful_text_queue (status, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_htq_content ON harmful_text_queue (content_type, content_id);
-CREATE INDEX IF NOT EXISTS idx_htq_auto    ON harmful_text_queue (auto_approve_at) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_htq_content  ON harmful_text_queue (content_type, content_id);
+CREATE INDEX IF NOT EXISTS idx_htq_reviewed ON harmful_text_queue (reviewed_at) WHERE reviewed_at IS NULL;

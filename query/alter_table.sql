@@ -519,3 +519,92 @@
 -- DROP INDEX IF EXISTS idx_jre_meta_exp_level;
 -- ALTER TABLE job_role_embedding DROP COLUMN IF EXISTS meta_experience_level;
 -- ALTER TABLE job_role_embedding DROP COLUMN IF EXISTS meta_role_budget;
+
+-- Job posts and profile sub-entities (portfolio, work_experience, education) move onto the
+-- same scanning -> visible | blocked instant-block pattern proposals already use, replacing
+-- the old pre-moderation-queue + held_active_contract design for job_post content flags.
+-- Added with DEFAULT 'visible' first so existing rows backfill safely (they were already
+-- live under the old system), then flipped the column default to 'scanning' for new rows
+-- going forward, so a create path that forgets to set it explicitly fails closed (hidden
+-- until scanned) instead of failing open like a plain 'visible' default would.
+-- portfolio already had moderation_status/scanned_at from an earlier pass; only its default
+-- needed aligning to 'scanning'.
+-- ALTER TABLE work_experience ADD COLUMN IF NOT EXISTS moderation_status TEXT NOT NULL DEFAULT 'visible';
+-- ALTER TABLE work_experience ADD COLUMN IF NOT EXISTS scanned_at TIMESTAMPTZ;
+-- ALTER TABLE work_experience ADD CONSTRAINT work_experience_moderation_status_check
+    -- CHECK (moderation_status IN ('scanning', 'visible', 'blocked'));
+-- ALTER TABLE work_experience ALTER COLUMN moderation_status SET DEFAULT 'scanning';
+
+-- ALTER TABLE education ADD COLUMN IF NOT EXISTS moderation_status TEXT NOT NULL DEFAULT 'visible';
+-- ALTER TABLE education ADD COLUMN IF NOT EXISTS scanned_at TIMESTAMPTZ;
+-- ALTER TABLE education ADD CONSTRAINT education_moderation_status_check
+    -- CHECK (moderation_status IN ('scanning', 'visible', 'blocked'));
+-- ALTER TABLE education ALTER COLUMN moderation_status SET DEFAULT 'scanning';
+
+-- ALTER TABLE job_post ADD COLUMN IF NOT EXISTS moderation_status TEXT NOT NULL DEFAULT 'visible';
+-- ALTER TABLE job_post ADD COLUMN IF NOT EXISTS scanned_at TIMESTAMPTZ;
+-- ALTER TABLE job_post ADD CONSTRAINT job_post_moderation_status_check
+    -- CHECK (moderation_status IN ('scanning', 'visible', 'blocked'));
+-- ALTER TABLE job_post ALTER COLUMN moderation_status SET DEFAULT 'scanning';
+
+-- ALTER TABLE portfolio ALTER COLUMN moderation_status SET DEFAULT 'scanning';
+
+-- Self-delete must not destroy the *other* party's DM history. user_a_id/user_b_id/
+-- initiator_id/sender_id move from ON DELETE CASCADE to ON DELETE SET NULL (and become
+-- nullable) - deleting one user anonymizes their side of a thread/message instead of
+-- wiping the row. Application code (UserFunctions.delete_user) then checks, per thread,
+-- whether the *other* side is already NULL (i.e. that participant was deleted earlier)
+-- and only then purges the thread outright. UNIQUE(user_a_id, user_b_id) and
+-- CHECK(user_a_id < user_b_id) both still hold with NULLs (NULL <> NULL for uniqueness,
+-- and a NULL comparison satisfies a CHECK) - verified, no constraint changes needed there.
+-- ALTER TABLE dm_thread ALTER COLUMN user_a_id DROP NOT NULL;
+-- ALTER TABLE dm_thread ALTER COLUMN user_b_id DROP NOT NULL;
+-- ALTER TABLE dm_thread ALTER COLUMN initiator_id DROP NOT NULL;
+-- ALTER TABLE dm_message ALTER COLUMN sender_id DROP NOT NULL;
+
+-- ALTER TABLE dm_thread DROP CONSTRAINT dm_thread_user_a_id_fkey;
+-- ALTER TABLE dm_thread ADD CONSTRAINT dm_thread_user_a_id_fkey
+    -- FOREIGN KEY (user_a_id) REFERENCES users(user_id) ON DELETE SET NULL;
+
+-- ALTER TABLE dm_thread DROP CONSTRAINT dm_thread_user_b_id_fkey;
+-- ALTER TABLE dm_thread ADD CONSTRAINT dm_thread_user_b_id_fkey
+    -- FOREIGN KEY (user_b_id) REFERENCES users(user_id) ON DELETE SET NULL;
+
+-- initiator_id previously had no ON DELETE clause at all (defaulted to blocking NO
+-- ACTION) - harmless only because it's always a subset of {user_a_id, user_b_id} and
+-- those used to CASCADE the row away first. Once those stop cascading, this needed the
+-- same SET NULL treatment or every self-delete that ever initiated a thread would throw.
+-- ALTER TABLE dm_thread DROP CONSTRAINT dm_thread_initiator_id_fkey;
+-- ALTER TABLE dm_thread ADD CONSTRAINT dm_thread_initiator_id_fkey
+    -- FOREIGN KEY (initiator_id) REFERENCES users(user_id) ON DELETE SET NULL;
+
+-- ALTER TABLE dm_message DROP CONSTRAINT dm_message_sender_id_fkey;
+-- ALTER TABLE dm_message ADD CONSTRAINT dm_message_sender_id_fkey
+    -- FOREIGN KEY (sender_id) REFERENCES users(user_id) ON DELETE SET NULL;
+
+-- harmful_text_queue's pending/approved/rejected + 30-day auto_approve_at workflow was
+-- pure theater by this point: neither the automatic 30-day sweep nor the manual admin
+-- approve/reject button gated any real action anymore (job_post/portfolio/education/
+-- work_experience/proposal all already get their real consequence - instant visibility
+-- gating - through their own dedicated mechanisms; the one place "approve" still did
+-- something, closing a job post, was a verbatim duplicate of the already-existing
+-- admin_close_job()). Collapsed to a plain audit trail: reviewed_at (nullable) replaces
+-- the whole status/auto_approve_at machinery - NULL means unreviewed, a timestamp means
+-- an admin looked at it and optionally left admin_note. No column drives any action.
+-- DROP INDEX IF EXISTS idx_tq_auto;
+-- DROP INDEX IF EXISTS idx_tq_status;
+-- ALTER TABLE harmful_text_queue DROP COLUMN status;
+-- ALTER TABLE harmful_text_queue DROP COLUMN auto_approve_at;
+-- ALTER TABLE harmful_text_queue RENAME COLUMN actioned_at TO reviewed_at;
+-- CREATE INDEX idx_tq_reviewed ON harmful_text_queue (reviewed_at) WHERE reviewed_at IS NULL;
+
+-- Found by the walkthrough after the change above: harmful_text_queue.admin_user_id had
+-- no ON DELETE clause at all (defaulted to blocking NO ACTION), so an admin who ever
+-- reviewed even one item could never delete their own account afterward - the exact
+-- same class of bug as gap #1 (self-delete blocked by an unhandled RESTRICT), just on a
+-- different table. Fixed the same way as the DM anonymize work: the audit trail should
+-- outlive the specific admin's account, so it survives with admin_user_id set to NULL
+-- rather than blocking the delete or cascading the audit rows away.
+-- ALTER TABLE harmful_text_queue DROP CONSTRAINT content_moderation_queue_admin_user_id_fkey;
+-- ALTER TABLE harmful_text_queue ADD CONSTRAINT content_moderation_queue_admin_user_id_fkey
+    -- FOREIGN KEY (admin_user_id) REFERENCES users(user_id) ON DELETE SET NULL;
