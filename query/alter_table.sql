@@ -639,3 +639,36 @@ ALTER TABLE portfolio       ADD COLUMN IF NOT EXISTS detected_labels JSONB NOT N
 -- column) rather than scanned - found unscanned during the 2026-07-11 full-field audit
 -- (HARMFUL_TEXT.md), and simpler to delete a feature nothing used than to defend it.
 ALTER TABLE skill DROP COLUMN IF EXISTS search_tokens;
+
+-- Schema-file drift audit (2026-07-11): "does create_table.sql/alter_table.sql actually
+-- mirror the live DB?" - answer was no, for two tables/columns that were evidently created
+-- live at some point but never written back to these tracked files. Found by diffing
+-- information_schema.columns against a parse of both files; both gaps below were already
+-- live and already in active use by the backend, so this is a documentation-catch-up on
+-- the tracked schema, not a live migration - create_table.sql now has both inline too, so
+-- a fresh clone + create_table.sql produces the same schema this ALTER would.
+
+-- job_fit_analysis_usage (the daily per-freelancer job-fit-analysis rate limit, §1.5 of
+-- ASW_contributions.md) existed live with no CREATE TABLE anywhere in this file.
+CREATE TABLE IF NOT EXISTS job_fit_analysis_usage (
+    usage_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    freelancer_id  UUID NOT NULL,
+    usage_date     DATE NOT NULL DEFAULT CURRENT_DATE,
+    request_count  INTEGER NOT NULL DEFAULT 0,
+    created_at     TIMESTAMP DEFAULT NOW(),
+    updated_at     TIMESTAMP DEFAULT NOW(),
+    UNIQUE (freelancer_id, usage_date),
+    FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE
+);
+
+CREATE TRIGGER trg_job_fit_analysis_usage_updated_at
+    BEFORE UPDATE ON job_fit_analysis_usage
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE INDEX IF NOT EXISTS idx_job_fit_usage_lookup
+    ON job_fit_analysis_usage (freelancer_id, usage_date);
+
+-- appeals.proof_file_url existed live and is actively written by admin_functions.py's
+-- create_appeal (the ban-appeal proof-file upload flow, admin_routes.py) but was missing
+-- from the appeals table definition.
+ALTER TABLE appeals ADD COLUMN IF NOT EXISTS proof_file_url VARCHAR(500);

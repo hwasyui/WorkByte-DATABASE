@@ -575,6 +575,24 @@ CREATE INDEX IF NOT EXISTS idx_freelancer_embedding_dirty
     ON freelancer_embedding (embedding_dirty)
     WHERE embedding_dirty = TRUE;
 
+CREATE TABLE IF NOT EXISTS job_fit_analysis_usage (
+    usage_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    freelancer_id  UUID NOT NULL,
+    usage_date     DATE NOT NULL DEFAULT CURRENT_DATE,
+    request_count  INTEGER NOT NULL DEFAULT 0,
+    created_at     TIMESTAMP DEFAULT NOW(),
+    updated_at     TIMESTAMP DEFAULT NOW(),
+    UNIQUE (freelancer_id, usage_date),
+    FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE
+);
+
+CREATE TRIGGER trg_job_fit_analysis_usage_updated_at
+    BEFORE UPDATE ON job_fit_analysis_usage
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE INDEX IF NOT EXISTS idx_job_fit_usage_lookup
+    ON job_fit_analysis_usage (freelancer_id, usage_date);
+
 CREATE TABLE IF NOT EXISTS contract_embedding (
     embedding_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     contract_id        UUID NOT NULL UNIQUE,
@@ -889,6 +907,7 @@ CREATE TABLE IF NOT EXISTS appeals (
     admin_note    TEXT,
     actioned_at   TIMESTAMP,
     created_at    TIMESTAMP DEFAULT NOW(),
+    proof_file_url VARCHAR(500),
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
 );
 
