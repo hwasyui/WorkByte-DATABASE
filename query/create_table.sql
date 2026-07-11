@@ -146,7 +146,6 @@ CREATE TABLE IF NOT EXISTS skill (
     skill_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     skill_name     VARCHAR(100) NOT NULL UNIQUE,
     skill_category skill_category_type,
-    search_tokens  TEXT,
     created_at     TIMESTAMP DEFAULT NOW()
 );
 
@@ -175,6 +174,7 @@ CREATE TABLE IF NOT EXISTS work_experience (
     updated_at         TIMESTAMP DEFAULT NOW(),
     moderation_status  TEXT NOT NULL DEFAULT 'scanning',
     scanned_at         TIMESTAMPTZ,
+    detected_labels    JSONB NOT NULL DEFAULT '[]',
     CHECK (moderation_status IN ('scanning', 'visible', 'blocked')),
     FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE
 );
@@ -198,6 +198,7 @@ CREATE TABLE IF NOT EXISTS education (
     updated_at        TIMESTAMP DEFAULT NOW(),
     moderation_status TEXT NOT NULL DEFAULT 'scanning',
     scanned_at        TIMESTAMPTZ,
+    detected_labels   JSONB NOT NULL DEFAULT '[]',
     CHECK (moderation_status IN ('scanning', 'visible', 'blocked')),
     FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE
 );
@@ -230,6 +231,7 @@ CREATE TABLE IF NOT EXISTS job_post (
     closure_note       TEXT,
     moderation_status  TEXT NOT NULL DEFAULT 'scanning',
     scanned_at         TIMESTAMPTZ,
+    detected_labels    JSONB NOT NULL DEFAULT '[]',
     CHECK (moderation_status IN ('scanning', 'visible', 'blocked')),
     FOREIGN KEY (client_id) REFERENCES client(client_id) ON DELETE CASCADE
 );
@@ -353,6 +355,7 @@ CREATE TABLE IF NOT EXISTS proposal (
     submitted_at      TIMESTAMP DEFAULT NOW(),
     moderation_status TEXT NOT NULL DEFAULT 'visible',
     scanned_at        TIMESTAMPTZ,
+    detected_labels   JSONB NOT NULL DEFAULT '[]',
     UNIQUE (freelancer_id, job_role_id),
     CHECK (moderation_status IN ('scanning', 'visible', 'blocked')),
     FOREIGN KEY (job_post_id)   REFERENCES job_post(job_post_id)     ON DELETE CASCADE,
@@ -436,6 +439,7 @@ CREATE TABLE IF NOT EXISTS portfolio (
     updated_at          TIMESTAMP DEFAULT NOW(),
     moderation_status   TEXT NOT NULL DEFAULT 'scanning',
     scanned_at          TIMESTAMPTZ,
+    detected_labels     JSONB NOT NULL DEFAULT '[]',
     CHECK (moderation_status IN ('scanning', 'visible', 'blocked')),
     FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE,
     FOREIGN KEY (contract_id)   REFERENCES contract(contract_id)     ON DELETE SET NULL

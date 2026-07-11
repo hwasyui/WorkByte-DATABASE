@@ -608,3 +608,34 @@
 -- ALTER TABLE harmful_text_queue DROP CONSTRAINT content_moderation_queue_admin_user_id_fkey;
 -- ALTER TABLE harmful_text_queue ADD CONSTRAINT content_moderation_queue_admin_user_id_fkey
     -- FOREIGN KEY (admin_user_id) REFERENCES users(user_id) ON DELETE SET NULL;
+
+-- Async-scanned content (education, work_experience, portfolio, job_post, proposal) had
+-- moderation_status/scanned_at but nowhere on the entity itself to see WHY it was
+-- blocked - detected_labels only ever existed transiently in the notification body text
+-- and in harmful_text_queue (admin-only, via GET /admin/moderation). A freelancer who
+-- missed/dismissed the notification and reopened their profile later saw
+-- moderation_status='blocked' with zero indication of what to fix. Adds the same raw
+-- label keys (toxic/obscene/threat/insult/identity_hate) the scanner already returns and
+-- harmful_text_queue already stores, directly onto the entity so every relevant route
+-- returns it, matching harmful_text_queue's own JSONB shape (scam_job_flags.detected_keywords
+-- is the precedent for this pattern on this codebase). Sync-reject fields (bio/full_name/
+-- title/skill_name/DM messages) don't need this - nothing is ever saved when they're
+-- flagged, so the label just rides along in that request's own error response
+-- (ResponseSchema.error's new `extra` param) instead of needing a column anywhere.
+ALTER TABLE work_experience ADD COLUMN IF NOT EXISTS detected_labels JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE education       ADD COLUMN IF NOT EXISTS detected_labels JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE job_post        ADD COLUMN IF NOT EXISTS detected_labels JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE proposal        ADD COLUMN IF NOT EXISTS detected_labels JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE portfolio       ADD COLUMN IF NOT EXISTS detected_labels JSONB NOT NULL DEFAULT '[]';
+
+-- skill.search_tokens (fed only by SkillCreate.description) was dead weight end to end:
+-- the frontend's actual "add skill" UI never sent a description (only the standalone
+-- SkillModel carried the field for display), and the read side never worked either -
+-- SkillResponse expected a key literally named `description`, but the DB column was
+-- `search_tokens`, so it always deserialized to None regardless of what was stored. Only
+-- SkillFunctions.search_skills_autocomplete's ILIKE clause ever read the raw column, and
+-- since nothing ever populated it through the app, that clause never matched anything in
+-- practice either. Removed end to end (schema, create/update/search functions, this
+-- column) rather than scanned - found unscanned during the 2026-07-11 full-field audit
+-- (HARMFUL_TEXT.md), and simpler to delete a feature nothing used than to defend it.
+ALTER TABLE skill DROP COLUMN IF EXISTS search_tokens;
