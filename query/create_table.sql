@@ -221,10 +221,6 @@ CREATE TABLE IF NOT EXISTS job_post (
     project_category   VARCHAR(100) DEFAULT 'general',
     closure_reason     TEXT,
     closure_note       TEXT,
-    moderation_status  TEXT NOT NULL DEFAULT 'scanning',
-    scanned_at         TIMESTAMPTZ,
-    detected_labels    JSONB NOT NULL DEFAULT '[]',
-    CHECK (moderation_status IN ('scanning', 'visible', 'blocked')),
     FOREIGN KEY (client_id) REFERENCES client(client_id) ON DELETE CASCADE
 );
 
@@ -345,11 +341,7 @@ CREATE TABLE IF NOT EXISTS proposal (
     status            proposal_status NOT NULL,
     is_ai_generated   BOOLEAN DEFAULT FALSE,
     submitted_at      TIMESTAMP DEFAULT NOW(),
-    moderation_status TEXT NOT NULL DEFAULT 'visible',
-    scanned_at        TIMESTAMPTZ,
-    detected_labels   JSONB NOT NULL DEFAULT '[]',
     UNIQUE (freelancer_id, job_role_id),
-    CHECK (moderation_status IN ('scanning', 'visible', 'blocked')),
     FOREIGN KEY (job_post_id)   REFERENCES job_post(job_post_id)     ON DELETE CASCADE,
     FOREIGN KEY (job_role_id)   REFERENCES job_role(job_role_id)     ON DELETE SET NULL,
     FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE

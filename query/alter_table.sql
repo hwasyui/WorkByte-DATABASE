@@ -673,18 +673,11 @@ CREATE INDEX IF NOT EXISTS idx_job_fit_usage_lookup
 -- from the appeals table definition.
 ALTER TABLE appeals ADD COLUMN IF NOT EXISTS proof_file_url VARCHAR(500);
 
--- work_experience/education/portfolio.moderation_status/scanned_at/detected_labels were
--- dead schema at the currently-pinned backend commit (2026-06-27, f73cf28): no code at this
--- commit references any of the three columns on any of these tables (run_education_scan/
--- run_work_experience_scan/run_portfolio_scan and the rest of the save-then-instant-block
--- redesign that uses them don't exist until later, unmerged commits -- see harmful_text.md
--- and ASW_contributions.md's correction notes). Every row's moderation_status sat frozen at
--- its 'scanning' default forever, since nothing at this commit ever transitioned it. Removed
--- to match what's actually running rather than leave inert columns describing a scan
--- pipeline this checkout doesn't have. job_post/proposal keep their own moderation_status/
--- scanned_at/detected_labels columns untouched -- both already have working real moderation
--- via other means at this commit (job_post via harmful_text_queue's 30-day sweep; proposal
--- via sync-reject-outright), unlike these three.
+-- work_experience/education/portfolio.moderation_status/scanned_at/detected_labels are dead
+-- schema: no code references any of the three columns on any of these tables anywhere in
+-- routes/. Every row's moderation_status sat frozen at its 'scanning' default forever, since
+-- nothing ever transitioned it. Removed to match what's actually running rather than leave
+-- inert columns describing a scan pipeline this codebase doesn't have wired up.
 ALTER TABLE work_experience DROP CONSTRAINT IF EXISTS work_experience_moderation_status_check;
 ALTER TABLE work_experience DROP COLUMN IF EXISTS moderation_status;
 ALTER TABLE work_experience DROP COLUMN IF EXISTS scanned_at;
@@ -699,6 +692,24 @@ ALTER TABLE portfolio DROP CONSTRAINT IF EXISTS portfolio_moderation_status_chec
 ALTER TABLE portfolio DROP COLUMN IF EXISTS moderation_status;
 ALTER TABLE portfolio DROP COLUMN IF EXISTS scanned_at;
 ALTER TABLE portfolio DROP COLUMN IF EXISTS detected_labels;
+
+-- job_post/proposal.moderation_status/scanned_at/detected_labels are dead schema too, for the
+-- same reason as work_experience/education/portfolio above: no code in routes/job_posts/ or
+-- routes/proposals/ reads or writes any of the three on either table. Real moderation for
+-- both lives entirely outside these columns -- job_post's scan result goes into
+-- harmful_text_queue (its own toxic_score/detected_labels/status, checked by the 30-day
+-- sweep), and proposal is sync-reject-outright, so a flagged cover letter is never persisted
+-- in the first place and a clean one never needs a scan result recorded on it afterward.
+-- Neither JobPostResponse nor ProposalResponse (schema_model.py) even declares these fields.
+ALTER TABLE job_post DROP CONSTRAINT IF EXISTS job_post_moderation_status_check;
+ALTER TABLE job_post DROP COLUMN IF EXISTS moderation_status;
+ALTER TABLE job_post DROP COLUMN IF EXISTS scanned_at;
+ALTER TABLE job_post DROP COLUMN IF EXISTS detected_labels;
+
+ALTER TABLE proposal DROP CONSTRAINT IF EXISTS proposal_moderation_status_check;
+ALTER TABLE proposal DROP COLUMN IF EXISTS moderation_status;
+ALTER TABLE proposal DROP COLUMN IF EXISTS scanned_at;
+ALTER TABLE proposal DROP COLUMN IF EXISTS detected_labels;
 
 -- client_reviews and its dependent tables (client_review_ratings, client_review_written_content,
 -- client_review_ai_analysis), plus the trust-score columns added alongside them on
