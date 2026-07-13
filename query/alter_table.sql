@@ -672,3 +672,92 @@ CREATE INDEX IF NOT EXISTS idx_job_fit_usage_lookup
 -- create_appeal (the ban-appeal proof-file upload flow, admin_routes.py) but was missing
 -- from the appeals table definition.
 ALTER TABLE appeals ADD COLUMN IF NOT EXISTS proof_file_url VARCHAR(500);
+
+-- work_experience/education/portfolio.moderation_status/scanned_at/detected_labels were
+-- dead schema at the currently-pinned backend commit (2026-06-27, f73cf28): no code at this
+-- commit references any of the three columns on any of these tables (run_education_scan/
+-- run_work_experience_scan/run_portfolio_scan and the rest of the save-then-instant-block
+-- redesign that uses them don't exist until later, unmerged commits -- see harmful_text.md
+-- and ASW_contributions.md's correction notes). Every row's moderation_status sat frozen at
+-- its 'scanning' default forever, since nothing at this commit ever transitioned it. Removed
+-- to match what's actually running rather than leave inert columns describing a scan
+-- pipeline this checkout doesn't have. job_post/proposal keep their own moderation_status/
+-- scanned_at/detected_labels columns untouched -- both already have working real moderation
+-- via other means at this commit (job_post via harmful_text_queue's 30-day sweep; proposal
+-- via sync-reject-outright), unlike these three.
+ALTER TABLE work_experience DROP CONSTRAINT IF EXISTS work_experience_moderation_status_check;
+ALTER TABLE work_experience DROP COLUMN IF EXISTS moderation_status;
+ALTER TABLE work_experience DROP COLUMN IF EXISTS scanned_at;
+ALTER TABLE work_experience DROP COLUMN IF EXISTS detected_labels;
+
+ALTER TABLE education DROP CONSTRAINT IF EXISTS education_moderation_status_check;
+ALTER TABLE education DROP COLUMN IF EXISTS moderation_status;
+ALTER TABLE education DROP COLUMN IF EXISTS scanned_at;
+ALTER TABLE education DROP COLUMN IF EXISTS detected_labels;
+
+ALTER TABLE portfolio DROP CONSTRAINT IF EXISTS portfolio_moderation_status_check;
+ALTER TABLE portfolio DROP COLUMN IF EXISTS moderation_status;
+ALTER TABLE portfolio DROP COLUMN IF EXISTS scanned_at;
+ALTER TABLE portfolio DROP COLUMN IF EXISTS detected_labels;
+
+-- client_reviews and its dependent tables (client_review_ratings, client_review_written_content,
+-- client_review_ai_analysis), plus the trust-score columns added alongside them on
+-- client_trust_score/freelancer_trust_scores/review_ai_analysis/red_flag_alerts, and the
+-- bias_detection_log removal, were all part of an uncommitted local migration for a
+-- client-reviews-freelancers feature. The backend code that uses them
+-- (routes/client_reviews/*.py, ai_related/review_analysis/client_review_*.py) does not exist
+-- at the currently-pinned commit (2026-06-27, f73cf28) -- confirmed directly: those files are
+-- absent from this checkout (only stale .pyc cache remained). That code was added 2026-07-12,
+-- after the commit this backend is intentionally pinned to. Dropped to match what's actually
+-- running; the migration itself is not lost -- it exists in the database repo's git history
+-- (this file's own history) and in the backend repo on origin/main / the local 'latest'
+-- branch (commit 71e982e), should the backend ever be brought forward to that commit.
+DROP TABLE IF EXISTS client_review_ai_analysis;
+DROP TABLE IF EXISTS client_review_written_content;
+DROP TABLE IF EXISTS client_review_ratings;
+DROP TABLE IF EXISTS client_reviews;
+
+ALTER TABLE client_trust_score DROP COLUMN IF EXISTS weighted_review_avg_received;
+ALTER TABLE client_trust_score DROP COLUMN IF EXISTS total_reviews_received;
+ALTER TABLE client_trust_score DROP COLUMN IF EXISTS responsiveness_score;
+ALTER TABLE client_trust_score DROP COLUMN IF EXISTS communication_sentiment;
+ALTER TABLE client_trust_score DROP COLUMN IF EXISTS authenticity_confidence;
+ALTER TABLE client_trust_score DROP COLUMN IF EXISTS consistency_score;
+ALTER TABLE client_trust_score DROP COLUMN IF EXISTS dispute_fairness_score;
+ALTER TABLE client_trust_score DROP COLUMN IF EXISTS ai_review_summary;
+
+-- Restore the original client(client_id)-keyed FK (the uncommitted migration repointed it to
+-- users(user_id); reversing that repoint along with everything else from the same migration).
+ALTER TABLE client_trust_score DROP CONSTRAINT IF EXISTS client_trust_score_client_id_fkey;
+ALTER TABLE client_trust_score ADD CONSTRAINT client_trust_score_client_id_fkey
+    FOREIGN KEY (client_id) REFERENCES client(client_id) ON DELETE CASCADE;
+
+ALTER TABLE freelancer_trust_scores DROP COLUMN IF EXISTS on_time_score;
+ALTER TABLE freelancer_trust_scores DROP COLUMN IF EXISTS authenticity_confidence;
+ALTER TABLE freelancer_trust_scores DROP COLUMN IF EXISTS consistency_score;
+ALTER TABLE freelancer_trust_scores DROP COLUMN IF EXISTS ai_review_summary;
+ALTER TABLE freelancer_trust_scores DROP COLUMN IF EXISTS ai_review_summary_updated_at;
+
+ALTER TABLE review_ai_analysis DROP COLUMN IF EXISTS mismatch_severity;
+
+-- The same migration also dropped bias_score/bias_flags from review_ai_analysis and the
+-- whole bias_detection_log table -- restoring both to match create_table.sql's baseline,
+-- which still has them (this backend commit never removed bias detection; that removal was
+-- also part of the not-yet-merged client-reviews migration).
+ALTER TABLE review_ai_analysis ADD COLUMN IF NOT EXISTS bias_score DECIMAL(4,3) CHECK (bias_score BETWEEN 0 AND 1.0);
+ALTER TABLE review_ai_analysis ADD COLUMN IF NOT EXISTS bias_flags JSONB NOT NULL DEFAULT '{}';
+
+CREATE TABLE IF NOT EXISTS bias_detection_log (
+    id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    freelancer_id            UUID NOT NULL,
+    review_id                UUID NOT NULL,
+    detected_factors         JSONB NOT NULL DEFAULT '{}',
+    score_before_adjustment  DECIMAL(4,3),
+    score_after_adjustment   DECIMAL(4,3),
+    adjustment_applied       BOOLEAN NOT NULL DEFAULT FALSE,
+    logged_at                TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    CONSTRAINT fk_bdl_freelancer FOREIGN KEY (freelancer_id) REFERENCES users(user_id)  ON DELETE CASCADE,
+    CONSTRAINT fk_bdl_review     FOREIGN KEY (review_id)     REFERENCES reviews(id)      ON DELETE CASCADE
+);
+
+ALTER TABLE red_flag_alerts DROP COLUMN IF EXISTS subject_type;

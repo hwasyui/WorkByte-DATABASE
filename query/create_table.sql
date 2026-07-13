@@ -172,10 +172,6 @@ CREATE TABLE IF NOT EXISTS work_experience (
     description        TEXT,
     created_at         TIMESTAMP DEFAULT NOW(),
     updated_at         TIMESTAMP DEFAULT NOW(),
-    moderation_status  TEXT NOT NULL DEFAULT 'scanning',
-    scanned_at         TIMESTAMPTZ,
-    detected_labels    JSONB NOT NULL DEFAULT '[]',
-    CHECK (moderation_status IN ('scanning', 'visible', 'blocked')),
     FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE
 );
 
@@ -196,10 +192,6 @@ CREATE TABLE IF NOT EXISTS education (
     description       TEXT,
     created_at        TIMESTAMP DEFAULT NOW(),
     updated_at        TIMESTAMP DEFAULT NOW(),
-    moderation_status TEXT NOT NULL DEFAULT 'scanning',
-    scanned_at        TIMESTAMPTZ,
-    detected_labels   JSONB NOT NULL DEFAULT '[]',
-    CHECK (moderation_status IN ('scanning', 'visible', 'blocked')),
     FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE
 );
 
@@ -437,10 +429,6 @@ CREATE TABLE IF NOT EXISTS portfolio (
     contract_id         UUID,
     created_at          TIMESTAMP DEFAULT NOW(),
     updated_at          TIMESTAMP DEFAULT NOW(),
-    moderation_status   TEXT NOT NULL DEFAULT 'scanning',
-    scanned_at          TIMESTAMPTZ,
-    detected_labels     JSONB NOT NULL DEFAULT '[]',
-    CHECK (moderation_status IN ('scanning', 'visible', 'blocked')),
     FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE,
     FOREIGN KEY (contract_id)   REFERENCES contract(contract_id)     ON DELETE SET NULL
 );
