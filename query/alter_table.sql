@@ -761,3 +761,21 @@ CREATE TABLE IF NOT EXISTS bias_detection_log (
 );
 
 ALTER TABLE red_flag_alerts DROP COLUMN IF EXISTS subject_type;
+
+-- harmful_text_queue was missing status/auto_approve_at/actioned_at entirely at the currently-pinned
+-- backend commit -- confirmed live: GET /admin/moderation 500'd with "column status does not exist"
+-- the moment _auto_approve_expired() ran. admin_functions.py's whole 30-day sweep
+-- (queue_harmful_text_scan's INSERT ... auto_approve_at, _auto_approve_expired()'s SELECT/UPDATE,
+-- action_moderation_item()'s UPDATE) depends on all three columns; without them the entire
+-- moderation-queue read path throws on every call, not just the sweep. reviewed_at (the column that
+-- was here instead) is genuinely dead -- confirmed zero SQL references anywhere in the backend, only
+-- a stale Pydantic type hint (functions/schema_model.py) -- dropped along with its now-pointless index.
+ALTER TABLE harmful_text_queue DROP COLUMN IF EXISTS reviewed_at;
+DROP INDEX IF EXISTS idx_htq_reviewed;
+
+ALTER TABLE harmful_text_queue ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';
+ALTER TABLE harmful_text_queue ADD CONSTRAINT harmful_text_queue_status_check
+    CHECK (status IN ('pending', 'approved', 'rejected'));
+ALTER TABLE harmful_text_queue ADD COLUMN IF NOT EXISTS auto_approve_at TIMESTAMP;
+ALTER TABLE harmful_text_queue ADD COLUMN IF NOT EXISTS actioned_at TIMESTAMP;
+CREATE INDEX IF NOT EXISTS idx_htq_status ON harmful_text_queue (status) WHERE status = 'pending';

@@ -928,10 +928,13 @@ CREATE TABLE IF NOT EXISTS harmful_text_queue (
     flagged_text         TEXT,
     admin_user_id        UUID,
     admin_note           TEXT,
-    reviewed_at          TIMESTAMP,
+    status               TEXT NOT NULL DEFAULT 'pending',
+    auto_approve_at      TIMESTAMP,
+    actioned_at          TIMESTAMP,
     created_at           TIMESTAMP DEFAULT NOW(),
+    CHECK (status IN ('pending', 'approved', 'rejected')),
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
     FOREIGN KEY (admin_user_id) REFERENCES users(user_id) ON DELETE SET NULL
 );
-CREATE INDEX IF NOT EXISTS idx_htq_content  ON harmful_text_queue (content_type, content_id);
-CREATE INDEX IF NOT EXISTS idx_htq_reviewed ON harmful_text_queue (reviewed_at) WHERE reviewed_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_htq_content ON harmful_text_queue (content_type, content_id);
+CREATE INDEX IF NOT EXISTS idx_htq_status  ON harmful_text_queue (status) WHERE status = 'pending';
