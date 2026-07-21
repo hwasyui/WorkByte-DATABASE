@@ -66,15 +66,22 @@ CREATE TABLE IF NOT EXISTS password_reset_otps (
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
 );
 
+CREATE INDEX IF NOT EXISTS idx_password_reset_otps_user_active
+    ON password_reset_otps (user_id, created_at DESC)
+    WHERE consumed_at IS NULL;
+
 CREATE TABLE IF NOT EXISTS user_oauth_providers (
     id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id          UUID NOT NULL,
-    provider         VARCHAR(100) NOT NULL,
+    provider         VARCHAR(50)  NOT NULL,
     provider_user_id VARCHAR(255) NOT NULL,
     provider_email   VARCHAR(255),
     created_at       TIMESTAMP DEFAULT NOW(),
+    UNIQUE (provider, provider_user_id),
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
 );
+
+CREATE INDEX IF NOT EXISTS idx_user_oauth_providers_user ON user_oauth_providers (user_id);
 
 CREATE TABLE IF NOT EXISTS refresh_tokens (
     token_id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -218,7 +225,7 @@ CREATE TABLE IF NOT EXISTS job_post (
     updated_at         TIMESTAMP DEFAULT NOW(),
     posted_at          TIMESTAMP,
     closed_at          TIMESTAMP,
-    project_category   VARCHAR(100) DEFAULT 'general',
+    project_category   VARCHAR(50) DEFAULT 'general',
     closure_reason     TEXT,
     closure_note       TEXT,
     FOREIGN KEY (client_id) REFERENCES client(client_id) ON DELETE CASCADE
@@ -242,9 +249,14 @@ CREATE TABLE IF NOT EXISTS scam_job_flags (
     auto_remove_at    TIMESTAMP NOT NULL,
     auto_closed       BOOLEAN NOT NULL DEFAULT TRUE,
     created_at        TIMESTAMP DEFAULT NOW(),
-    FOREIGN KEY (job_post_id) REFERENCES job_post(job_post_id) ON DELETE CASCADE,
-    FOREIGN KEY (client_id)   REFERENCES client(client_id)     ON DELETE CASCADE
+    FOREIGN KEY (job_post_id)   REFERENCES job_post(job_post_id) ON DELETE CASCADE,
+    FOREIGN KEY (client_id)     REFERENCES client(client_id)     ON DELETE CASCADE,
+    FOREIGN KEY (admin_user_id) REFERENCES users(user_id)
 );
+
+CREATE INDEX IF NOT EXISTS idx_scam_status ON scam_job_flags (status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_scam_client ON scam_job_flags (client_id);
+CREATE INDEX IF NOT EXISTS idx_scam_auto   ON scam_job_flags (auto_remove_at) WHERE status = 'pending';
 
 CREATE TABLE IF NOT EXISTS user_reports (
     report_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -260,9 +272,15 @@ CREATE TABLE IF NOT EXISTS user_reports (
     created_at       TIMESTAMP DEFAULT NOW(),
     job_post_id      UUID,
     FOREIGN KEY (reporter_id)      REFERENCES users(user_id)         ON DELETE CASCADE,
-    FOREIGN KEY (reported_user_id) REFERENCES users(user_id)         ON DELETE SET NULL,
-    FOREIGN KEY (job_post_id)      REFERENCES job_post(job_post_id)  ON DELETE SET NULL
+    FOREIGN KEY (reported_user_id) REFERENCES users(user_id)         ON DELETE CASCADE,
+    FOREIGN KEY (job_post_id)      REFERENCES job_post(job_post_id)  ON DELETE CASCADE,
+    FOREIGN KEY (admin_user_id)    REFERENCES users(user_id)
 );
+
+CREATE INDEX IF NOT EXISTS idx_reports_status   ON user_reports (status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_reports_reported ON user_reports (reported_user_id);
+CREATE INDEX IF NOT EXISTS idx_reports_job_post ON user_reports (job_post_id) WHERE job_post_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_reports_reporter ON user_reports (reporter_id);
 
 CREATE TABLE IF NOT EXISTS job_role (
     job_role_id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -316,8 +334,12 @@ CREATE INDEX IF NOT EXISTS idx_job_role_embedding_hnsw
     WHERE embedding_vector IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_job_role_embedding_dirty
     ON job_role_embedding (embedding_dirty) WHERE embedding_dirty = TRUE;
-CREATE INDEX IF NOT EXISTS idx_job_role_embedding_job_role
-    ON job_role_embedding (job_role_id) WHERE embedding_vector IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_job_role_embedding_job_post
+    ON job_role_embedding (job_post_id);
+
+CREATE TRIGGER trg_job_role_embedding_updated_at
+    BEFORE UPDATE ON job_role_embedding
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 CREATE TABLE IF NOT EXISTS job_file (
     job_file_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -347,6 +369,10 @@ CREATE TABLE IF NOT EXISTS proposal (
     FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE
 );
 
+-- One proposal per (freelancer, job_post) when the proposal is not tied to a specific role.
+CREATE UNIQUE INDEX IF NOT EXISTS proposal_freelancer_job_post_null_role_uniq
+    ON proposal (freelancer_id, job_post_id) WHERE job_role_id IS NULL;
+
 CREATE TABLE IF NOT EXISTS proposal_file (
     proposal_file_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     proposal_id      UUID NOT NULL,
@@ -362,7 +388,7 @@ CREATE TABLE IF NOT EXISTS contract (
     contract_id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     job_post_id                UUID NOT NULL,
     job_role_id                UUID NOT NULL,
-    proposal_id                UUID NOT NULL,
+    proposal_id                UUID NOT NULL UNIQUE,
     freelancer_id              UUID NOT NULL,
     client_id                  UUID NOT NULL,
     contract_title             VARCHAR(255) NOT NULL,
@@ -469,49 +495,7 @@ CREATE TABLE IF NOT EXISTS saved_job (
     FOREIGN KEY (job_post_id)   REFERENCES job_post(job_post_id)     ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS rating (
-    rating_id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    contract_id               UUID NOT NULL UNIQUE,
-    client_id                 UUID NOT NULL,
-    freelancer_id             UUID NOT NULL,
-    communication_score       INTEGER CHECK (communication_score BETWEEN 1 AND 5),
-    result_quality_score      INTEGER CHECK (result_quality_score BETWEEN 1 AND 5),
-    professionalism_score     INTEGER CHECK (professionalism_score BETWEEN 1 AND 5),
-    timeline_compliance_score INTEGER CHECK (timeline_compliance_score BETWEEN 1 AND 5),
-    overall_rating            DECIMAL(3, 2),
-    review_text               TEXT,
-    update_count              INTEGER DEFAULT 0,
-    created_at                TIMESTAMP DEFAULT NOW(),
-    updated_at                TIMESTAMP DEFAULT NOW(),
-    FOREIGN KEY (contract_id)   REFERENCES contract(contract_id)     ON DELETE CASCADE,
-    FOREIGN KEY (client_id)     REFERENCES client(client_id)         ON DELETE RESTRICT,
-    FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE RESTRICT
-);
-
-CREATE TRIGGER trg_rating_updated_at
-    BEFORE UPDATE ON rating
-    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-
-CREATE TABLE IF NOT EXISTS performance_rating (
-    performance_rating_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    freelancer_id               UUID NOT NULL UNIQUE,
-    overall_performance_score   DECIMAL(5, 2),
-    confidence_score            DECIMAL(5, 2),
-    total_ratings_received      INTEGER DEFAULT 0,
-    average_communication       DECIMAL(3, 2),
-    average_result_quality      DECIMAL(3, 2),
-    average_professionalism     DECIMAL(3, 2),
-    average_scope_compliance    DECIMAL(3, 2),
-    average_timeline_compliance DECIMAL(3, 2),
-    success_rate                DECIMAL(5, 2),
-    last_calculated_at          TIMESTAMP,
-    updated_at                  TIMESTAMP DEFAULT NOW(),
-    FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE
-);
-
-CREATE TRIGGER trg_performance_rating_updated_at
-    BEFORE UPDATE ON performance_rating
-    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+-- rating & performance_rating tables removed (no longer used); dropped via alter_table.sql
 
 CREATE TABLE IF NOT EXISTS client_trust_score (
     client_trust_score_id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -679,6 +663,10 @@ CREATE TABLE IF NOT EXISTS contract_submission (
     FOREIGN KEY (submitted_by)  REFERENCES users(user_id)        ON DELETE CASCADE
 );
 
+CREATE TRIGGER trigger_contract_submission_updated_at
+    BEFORE UPDATE ON contract_submission
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
 CREATE TABLE IF NOT EXISTS contract_submission_file (
     file_id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     submission_id     UUID NOT NULL,
@@ -804,21 +792,52 @@ CREATE TABLE IF NOT EXISTS review_ai_analysis (
     CONSTRAINT fk_raa_review FOREIGN KEY (review_id) REFERENCES reviews(id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS bias_detection_log (
-    id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    freelancer_id            UUID NOT NULL,
-    review_id                UUID NOT NULL,
-    detected_factors         JSONB NOT NULL DEFAULT '{}',
-    score_before_adjustment  DECIMAL(4,3),
-    score_after_adjustment   DECIMAL(4,3),
-    adjustment_applied       BOOLEAN NOT NULL DEFAULT FALSE,
-    logged_at                TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    CONSTRAINT fk_bdl_freelancer FOREIGN KEY (freelancer_id) REFERENCES users(user_id)  ON DELETE CASCADE,
-    CONSTRAINT fk_bdl_review     FOREIGN KEY (review_id)     REFERENCES reviews(id)      ON DELETE CASCADE
+CREATE TABLE IF NOT EXISTS client_reviews (
+    id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    contract_id    UUID NOT NULL,
+    reviewer_id    UUID NOT NULL,
+    client_id      UUID NOT NULL,
+    status         VARCHAR(20) NOT NULL DEFAULT 'pending',
+    is_anonymous   BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at     TIMESTAMP DEFAULT NOW(),
+    published_at   TIMESTAMP,
+    CONSTRAINT client_reviews_contract_id_key  UNIQUE (contract_id),
+    CONSTRAINT client_reviews_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES contract(contract_id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_bdl_freelancer_id ON bias_detection_log (freelancer_id);
-CREATE INDEX IF NOT EXISTS idx_bdl_review_id     ON bias_detection_log (review_id);
+CREATE INDEX IF NOT EXISTS idx_client_reviews_client_id ON client_reviews (client_id);
+
+CREATE TABLE IF NOT EXISTS client_review_ratings (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    client_review_id  UUID NOT NULL,
+    category          VARCHAR(50) NOT NULL,
+    score             NUMERIC NOT NULL,
+    CONSTRAINT client_review_ratings_client_review_id_fkey FOREIGN KEY (client_review_id) REFERENCES client_reviews(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS client_review_written_content (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    client_review_id  UUID NOT NULL,
+    ai_question       TEXT,
+    freelancer_answer TEXT,
+    overall_comment   TEXT,
+    CONSTRAINT client_review_written_content_client_review_id_fkey FOREIGN KEY (client_review_id) REFERENCES client_reviews(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS client_review_ai_analysis (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    client_review_id    UUID NOT NULL,
+    sentiment_score     NUMERIC,
+    sentiment_label     VARCHAR(20),
+    sentiment_mismatch  BOOLEAN DEFAULT FALSE,
+    mismatch_severity   NUMERIC,
+    authenticity_score  NUMERIC,
+    is_flagged_fake     BOOLEAN DEFAULT FALSE,
+    is_flagged_coerced  BOOLEAN DEFAULT FALSE,
+    flag_reasons        JSONB DEFAULT '[]',
+    overall_pass        BOOLEAN DEFAULT TRUE,
+    CONSTRAINT client_review_ai_analysis_client_review_id_fkey FOREIGN KEY (client_review_id) REFERENCES client_reviews(id) ON DELETE CASCADE
+);
 
 CREATE TABLE IF NOT EXISTS freelancer_trust_scores (
     id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -873,8 +892,11 @@ CREATE TABLE IF NOT EXISTS report_auto_actions (
     target_type  TEXT NOT NULL,
     target_id    UUID NOT NULL,
     report_count INTEGER NOT NULL,
-    created_at   TIMESTAMP DEFAULT NOW()
+    created_at   TIMESTAMP DEFAULT NOW(),
+    UNIQUE (target_type, target_id)
 );
+
+CREATE INDEX IF NOT EXISTS idx_raa_target ON report_auto_actions (target_type, target_id);
 
 CREATE TABLE IF NOT EXISTS appeals (
     appeal_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -888,8 +910,13 @@ CREATE TABLE IF NOT EXISTS appeals (
     actioned_at   TIMESTAMP,
     created_at    TIMESTAMP DEFAULT NOW(),
     proof_file_url VARCHAR(500),
-    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+    FOREIGN KEY (user_id)       REFERENCES users(user_id) ON DELETE CASCADE,
+    FOREIGN KEY (admin_user_id) REFERENCES users(user_id)
 );
+
+CREATE INDEX IF NOT EXISTS idx_appeals_user   ON appeals (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_appeals_target ON appeals (target_type, target_id);
+CREATE INDEX IF NOT EXISTS idx_appeals_status ON appeals (status, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS notifications (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -930,3 +957,5 @@ CREATE TABLE IF NOT EXISTS harmful_text_queue (
 );
 CREATE INDEX IF NOT EXISTS idx_htq_content ON harmful_text_queue (content_type, content_id);
 CREATE INDEX IF NOT EXISTS idx_htq_status  ON harmful_text_queue (status) WHERE status = 'pending';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_htq_content_pending_unique
+    ON harmful_text_queue (content_type, content_id) WHERE status = 'pending';

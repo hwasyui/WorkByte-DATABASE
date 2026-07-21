@@ -711,67 +711,144 @@ ALTER TABLE proposal DROP COLUMN IF EXISTS moderation_status;
 ALTER TABLE proposal DROP COLUMN IF EXISTS scanned_at;
 ALTER TABLE proposal DROP COLUMN IF EXISTS detected_labels;
 
--- client_reviews and its dependent tables (client_review_ratings, client_review_written_content,
--- client_review_ai_analysis), plus the trust-score columns added alongside them on
--- client_trust_score/freelancer_trust_scores/review_ai_analysis/red_flag_alerts, and the
--- bias_detection_log removal, were all part of an uncommitted local migration for a
--- client-reviews-freelancers feature. The backend code that uses them
--- (routes/client_reviews/*.py, ai_related/review_analysis/client_review_*.py) does not exist
--- at the currently-pinned commit (2026-06-27, f73cf28) -- confirmed directly: those files are
--- absent from this checkout (only stale .pyc cache remained). That code was added 2026-07-12,
--- after the commit this backend is intentionally pinned to. Dropped to match what's actually
--- running; the migration itself is not lost -- it exists in the database repo's git history
--- (this file's own history) and in the backend repo on origin/main / the local 'latest'
--- branch (commit 71e982e), should the backend ever be brought forward to that commit.
-DROP TABLE IF EXISTS client_review_ai_analysis;
-DROP TABLE IF EXISTS client_review_written_content;
-DROP TABLE IF EXISTS client_review_ratings;
-DROP TABLE IF EXISTS client_reviews;
+-- Added to support the three trained review-analysis models (authenticity
+-- classifier, sentiment-rating mismatch regressor, sentiment classifier) and
+-- the reworked trust score formula that uses them as named weighted inputs
+-- instead of an invisible gate. See ai_related/review_analysis/review_ml/.
 
-ALTER TABLE client_trust_score DROP COLUMN IF EXISTS weighted_review_avg_received;
-ALTER TABLE client_trust_score DROP COLUMN IF EXISTS total_reviews_received;
-ALTER TABLE client_trust_score DROP COLUMN IF EXISTS responsiveness_score;
-ALTER TABLE client_trust_score DROP COLUMN IF EXISTS communication_sentiment;
-ALTER TABLE client_trust_score DROP COLUMN IF EXISTS authenticity_confidence;
-ALTER TABLE client_trust_score DROP COLUMN IF EXISTS consistency_score;
-ALTER TABLE client_trust_score DROP COLUMN IF EXISTS dispute_fairness_score;
-ALTER TABLE client_trust_score DROP COLUMN IF EXISTS ai_review_summary;
+-- Continuous mismatch severity (|predicted_rating - actual_rating| from the
+-- mismatch model), alongside the existing boolean sentiment_mismatch, so the
+-- trust score's "consistency" component can average a real magnitude
+-- instead of just a fraction of true/false flags.
+ALTER TABLE review_ai_analysis ADD COLUMN IF NOT EXISTS mismatch_severity NUMERIC;
 
--- Restore the original client(client_id)-keyed FK (the uncommitted migration repointed it to
--- users(user_id); reversing that repoint along with everything else from the same migration).
-ALTER TABLE client_trust_score DROP CONSTRAINT IF EXISTS client_trust_score_client_id_fkey;
-ALTER TABLE client_trust_score ADD CONSTRAINT client_trust_score_client_id_fkey
-    FOREIGN KEY (client_id) REFERENCES client(client_id) ON DELETE CASCADE;
+-- Trust score breakdown components: on_time_score was already computed per
+-- contract but never aggregated/stored at the trust-score level; authenticity
+-- and consistency are new, computed from the trained models above.
+ALTER TABLE freelancer_trust_scores ADD COLUMN IF NOT EXISTS on_time_score NUMERIC;
+ALTER TABLE freelancer_trust_scores ADD COLUMN IF NOT EXISTS authenticity_confidence NUMERIC;
+ALTER TABLE freelancer_trust_scores ADD COLUMN IF NOT EXISTS consistency_score NUMERIC;
 
-ALTER TABLE freelancer_trust_scores DROP COLUMN IF EXISTS on_time_score;
-ALTER TABLE freelancer_trust_scores DROP COLUMN IF EXISTS authenticity_confidence;
-ALTER TABLE freelancer_trust_scores DROP COLUMN IF EXISTS consistency_score;
-ALTER TABLE freelancer_trust_scores DROP COLUMN IF EXISTS ai_review_summary;
-ALTER TABLE freelancer_trust_scores DROP COLUMN IF EXISTS ai_review_summary_updated_at;
+-- Freelancer-reviews-client system: symmetric counterpart to the reviews/
+-- review_ratings/review_written_content/review_ai_analysis tables, so a
+-- freelancer can review the client they worked for after contract completion.
+-- No payment tracking exists on this platform, so trust-score inputs are
+-- limited to what's actually observable: review text/ratings, DM
+-- responsiveness, and dispute-arbitration fairness.
 
-ALTER TABLE review_ai_analysis DROP COLUMN IF EXISTS mismatch_severity;
-
--- The same migration also dropped bias_score/bias_flags from review_ai_analysis and the
--- whole bias_detection_log table -- restoring both to match create_table.sql's baseline,
--- which still has them (this backend commit never removed bias detection; that removal was
--- also part of the not-yet-merged client-reviews migration).
-ALTER TABLE review_ai_analysis ADD COLUMN IF NOT EXISTS bias_score DECIMAL(4,3) CHECK (bias_score BETWEEN 0 AND 1.0);
-ALTER TABLE review_ai_analysis ADD COLUMN IF NOT EXISTS bias_flags JSONB NOT NULL DEFAULT '{}';
-
-CREATE TABLE IF NOT EXISTS bias_detection_log (
-    id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    freelancer_id            UUID NOT NULL,
-    review_id                UUID NOT NULL,
-    detected_factors         JSONB NOT NULL DEFAULT '{}',
-    score_before_adjustment  DECIMAL(4,3),
-    score_after_adjustment   DECIMAL(4,3),
-    adjustment_applied       BOOLEAN NOT NULL DEFAULT FALSE,
-    logged_at                TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    CONSTRAINT fk_bdl_freelancer FOREIGN KEY (freelancer_id) REFERENCES users(user_id)  ON DELETE CASCADE,
-    CONSTRAINT fk_bdl_review     FOREIGN KEY (review_id)     REFERENCES reviews(id)      ON DELETE CASCADE
+CREATE TABLE IF NOT EXISTS client_reviews (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    contract_id  UUID NOT NULL REFERENCES contract(contract_id) ON DELETE CASCADE,
+    reviewer_id  UUID NOT NULL,  -- freelancer's user_id (the one writing the review)
+    client_id    UUID NOT NULL,  -- client's user_id (being reviewed)
+    status       VARCHAR(20) NOT NULL DEFAULT 'pending',  -- pending | published | flagged | suppressed
+    is_anonymous BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at   TIMESTAMP DEFAULT NOW(),
+    published_at TIMESTAMP,
+    UNIQUE (contract_id)
 );
 
-ALTER TABLE red_flag_alerts DROP COLUMN IF EXISTS subject_type;
+CREATE TABLE IF NOT EXISTS client_review_ratings (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    client_review_id  UUID NOT NULL REFERENCES client_reviews(id) ON DELETE CASCADE,
+    category          VARCHAR(50) NOT NULL,  -- communication | clarity_of_requirements | responsiveness | professionalism
+    score             NUMERIC NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS client_review_written_content (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    client_review_id  UUID NOT NULL REFERENCES client_reviews(id) ON DELETE CASCADE,
+    ai_question       TEXT,
+    freelancer_answer TEXT,
+    overall_comment   TEXT
+);
+
+CREATE TABLE IF NOT EXISTS client_review_ai_analysis (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    client_review_id    UUID NOT NULL REFERENCES client_reviews(id) ON DELETE CASCADE,
+    sentiment_score     NUMERIC,
+    sentiment_label     VARCHAR(20),
+    sentiment_mismatch  BOOLEAN DEFAULT FALSE,
+    mismatch_severity   NUMERIC,
+    authenticity_score  NUMERIC,
+    is_flagged_fake     BOOLEAN DEFAULT FALSE,
+    is_flagged_coerced  BOOLEAN DEFAULT FALSE,
+    flag_reasons        JSONB DEFAULT '[]',
+    bias_score          NUMERIC,
+    bias_flags          JSONB DEFAULT '{}',
+    overall_pass        BOOLEAN DEFAULT TRUE
+);
+
+CREATE INDEX IF NOT EXISTS idx_client_reviews_client_id ON client_reviews (client_id);
+
+-- client_trust_score already existed (rating_consistency_score/extreme_rating_ratio/
+-- total_ratings_given track the client's quality AS A RATER of freelancers - untouched
+-- here). These new columns are the symmetric counterpart: the client's own reputation
+-- as reviewed BY freelancers. trust_score itself is repurposed as the composite output
+-- (it was previously a dormant manually-set field with no calculation engine behind it).
+ALTER TABLE client_trust_score ADD COLUMN IF NOT EXISTS weighted_review_avg_received NUMERIC;
+ALTER TABLE client_trust_score ADD COLUMN IF NOT EXISTS total_reviews_received INTEGER DEFAULT 0;
+ALTER TABLE client_trust_score ADD COLUMN IF NOT EXISTS responsiveness_score NUMERIC;
+ALTER TABLE client_trust_score ADD COLUMN IF NOT EXISTS communication_sentiment NUMERIC;
+ALTER TABLE client_trust_score ADD COLUMN IF NOT EXISTS authenticity_confidence NUMERIC;
+ALTER TABLE client_trust_score ADD COLUMN IF NOT EXISTS consistency_score NUMERIC;
+ALTER TABLE client_trust_score ADD COLUMN IF NOT EXISTS dispute_fairness_score NUMERIC;
+
+-- Correction to the above: the comment claimed client_id stays client.client_id-keyed,
+-- but client_review_pipeline.py's upsert_client_trust_score/get_client_trust_score
+-- actually key it by the client's user_id (resolved via client_reviews.client_id,
+-- itself a user_id - see client_reviews' own column comment above), matching
+-- freelancer_trust_scores' existing user_id-keyed FK. The original FK still pointed
+-- at client(client_id), so every upsert for a client without a coincidentally-matching
+-- client_id-as-user_id row violated the FK and was silently dropped by the pipeline's
+-- outer try/except - trust scores never actually persisted. The pre-existing
+-- rating-consistency columns (populated only via the standalone, frontend-unreachable
+-- /client-trust-scores CRUD API - never auto-computed) are unaffected by this repoint.
+ALTER TABLE client_trust_score DROP CONSTRAINT IF EXISTS client_trust_score_client_id_fkey;
+ALTER TABLE client_trust_score ADD CONSTRAINT client_trust_score_client_id_fkey
+    FOREIGN KEY (client_id) REFERENCES users(user_id) ON DELETE CASCADE;
+
+-- red_flag_alerts previously only ever meant "freelancer_id"; reused generically for
+-- clients too rather than duplicating the whole table, since the column is really just
+-- "subject's user_id". Existing rows default to 'freelancer' so nothing already relying
+-- on this table changes meaning.
+ALTER TABLE red_flag_alerts ADD COLUMN IF NOT EXISTS subject_type VARCHAR(20) NOT NULL DEFAULT 'freelancer';
+
+-- Bias detection removed from both review pipelines: it was a single-LLM self-report
+-- with no ground truth to evaluate against - name_bias needs a comparison baseline
+-- across a reviewer's full history to mean anything, not a per-review guess, and
+-- rating_vs_performance_inconsistency was already redundant with on_time_score/
+-- revision_rate_score/responsiveness_score independently feeding the trust score.
+-- client_review_ai_analysis.bias_score/bias_flags were never populated by the
+-- freelancer-reviews-client pipeline in the first place (always 0.0/{}). All backend
+-- code that read/wrote these columns (routes/reviews/review_functions.py,
+-- routes/client_reviews/client_review_functions.py, both *_pipeline.py files) has
+-- already been updated to stop referencing them - this migration must not run before
+-- that code is deployed, or the still-live INSERTs would fail on the dropped columns.
+ALTER TABLE review_ai_analysis DROP COLUMN IF EXISTS bias_score;
+ALTER TABLE review_ai_analysis DROP COLUMN IF EXISTS bias_flags;
+ALTER TABLE client_review_ai_analysis DROP COLUMN IF EXISTS bias_score;
+ALTER TABLE client_review_ai_analysis DROP COLUMN IF EXISTS bias_flags;
+
+-- bias_detection_log was write-only (see review_pipeline.py's old "Log significant
+-- bias for manual review" block, now removed) - confirmed nothing anywhere ever
+-- read from this table before dropping it.
+DROP TABLE IF EXISTS bias_detection_log;
+
+-- AI-generated profile-level review summary (generate_freelancer_review_summary,
+-- ai_related/review_analysis/review_ai_functions.py): synthesizes a freelancer's
+-- PUBLISHED reviews into a short profile blurb, regenerated every
+-- SUMMARY_REGEN_INTERVAL published reviews (3, 8, 13...) rather than on every
+-- single publish. Nullable with no default - stays NULL until a freelancer
+-- crosses MIN_REVIEWS_FOR_SUMMARY.
+ALTER TABLE freelancer_trust_scores ADD COLUMN IF NOT EXISTS ai_review_summary TEXT;
+ALTER TABLE freelancer_trust_scores ADD COLUMN IF NOT EXISTS ai_review_summary_updated_at TIMESTAMPTZ;
+
+-- Symmetric client-side counterpart (generate_client_review_summary,
+-- ai_related/review_analysis/client_review_ai_functions.py), same cadence.
+-- No companion _updated_at column needed here - client_trust_score already
+-- has an auto-maintained updated_at via trg_client_trust_score_updated_at.
+ALTER TABLE client_trust_score ADD COLUMN IF NOT EXISTS ai_review_summary TEXT;
 
 -- harmful_text_queue was missing status/auto_approve_at/actioned_at entirely at the currently-pinned
 -- backend commit -- confirmed live: GET /admin/moderation 500'd with "column status does not exist"
@@ -790,3 +867,23 @@ ALTER TABLE harmful_text_queue ADD CONSTRAINT harmful_text_queue_status_check
 ALTER TABLE harmful_text_queue ADD COLUMN IF NOT EXISTS auto_approve_at TIMESTAMP;
 ALTER TABLE harmful_text_queue ADD COLUMN IF NOT EXISTS actioned_at TIMESTAMP;
 CREATE INDEX IF NOT EXISTS idx_htq_status ON harmful_text_queue (status) WHERE status = 'pending';
+
+-- Duplicate pending scans found live: queue_harmful_text_scan() did an unconditional INSERT
+-- with no check for an already-pending row on the same content, and idx_htq_content was a
+-- plain (non-unique) index. Confirmed in the AI Analysis admin page: 2 job posts had 12 and 13
+-- duplicate pending rows apiece (identical scores, identical flagged_text) -- the frontend was
+-- faithfully rendering what the DB had, not a rendering bug. Most likely cause: repeated manual
+-- calls to the now-removed POST /admin/moderation/scan admin utility during earlier testing,
+-- since the only automatic call site (job_post_routes.py create_job_post) fires exactly once
+-- per job post. A partial unique index enforces at most one pending row per
+-- (content_type, content_id) at the DB level -- paired with ON CONFLICT DO NOTHING on the
+-- INSERT in queue_harmful_text_scan(), this also closes the race between two concurrent scans
+-- of the same content, not just the no-check case.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_htq_content_pending_unique
+    ON harmful_text_queue (content_type, content_id) WHERE status = 'pending';
+
+-- rating & performance_rating dropped -- the freelancer rating/performance flow is no longer
+-- used (superseded by the reviews / freelancer_performance_scores tables). Both were empty and
+-- nothing references them. Removed from create_table.sql as well so a fresh rebuild omits them.
+DROP TABLE IF EXISTS rating CASCADE;
+DROP TABLE IF EXISTS performance_rating CASCADE;

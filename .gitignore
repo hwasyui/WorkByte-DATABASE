@@ -7,6 +7,10 @@ pg_log/
 *.db
 *.sqlite
 
+# Database dumps / backups (may contain real user data)
+backups/
+*.dump
+
 # Postgres runtime
 postmaster.pid
 *.pid
