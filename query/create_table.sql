@@ -7,7 +7,7 @@ CREATE TYPE experience_level      AS ENUM ('entry', 'intermediate', 'expert');
 CREATE TYPE job_status            AS ENUM ('draft', 'active', 'closed', 'filled');
 CREATE TYPE budget_type           AS ENUM ('fixed', 'negotiable');
 CREATE TYPE importance_level      AS ENUM ('nice_to_have', 'preferred', 'required');
-CREATE TYPE proposal_status       AS ENUM ('pending', 'accepted', 'rejected', 'withdrawn');
+CREATE TYPE proposal_status       AS ENUM ('pending', 'accepted', 'rejected');
 CREATE TYPE payment_structure     AS ENUM ('full_payment', 'milestone_based');
 CREATE TYPE contract_status       AS ENUM ('active', 'completed', 'under_review', 'revision_requested', 'cancelled', 'disputed');
 
@@ -274,7 +274,7 @@ CREATE TABLE IF NOT EXISTS user_reports (
     FOREIGN KEY (reporter_id)      REFERENCES users(user_id)         ON DELETE CASCADE,
     FOREIGN KEY (reported_user_id) REFERENCES users(user_id)         ON DELETE CASCADE,
     FOREIGN KEY (job_post_id)      REFERENCES job_post(job_post_id)  ON DELETE CASCADE,
-    FOREIGN KEY (admin_user_id)    REFERENCES users(user_id)
+    FOREIGN KEY (admin_user_id)    REFERENCES users(user_id)         ON DELETE SET NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_reports_status   ON user_reports (status, created_at DESC);
@@ -413,7 +413,8 @@ CREATE TABLE IF NOT EXISTS contract (
     FOREIGN KEY (job_role_id)   REFERENCES job_role(job_role_id)     ON DELETE RESTRICT,
     FOREIGN KEY (proposal_id)   REFERENCES proposal(proposal_id)     ON DELETE RESTRICT,
     FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE RESTRICT,
-    FOREIGN KEY (client_id)     REFERENCES client(client_id)         ON DELETE RESTRICT
+    FOREIGN KEY (client_id)     REFERENCES client(client_id)         ON DELETE RESTRICT,
+    FOREIGN KEY (cancelled_by)  REFERENCES users(user_id)            ON DELETE SET NULL
 );
 
 CREATE TRIGGER trg_contract_updated_at
@@ -444,7 +445,7 @@ CREATE TABLE IF NOT EXISTS portfolio (
     project_url         VARCHAR(255),
     completion_date     DATE,
     is_auto_generated   BOOLEAN DEFAULT FALSE,
-    contract_id         UUID,
+    contract_id         UUID UNIQUE,
     created_at          TIMESTAMP DEFAULT NOW(),
     updated_at          TIMESTAMP DEFAULT NOW(),
     FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE,
@@ -508,7 +509,17 @@ CREATE TABLE IF NOT EXISTS client_trust_score (
     total_ratings_given      INTEGER DEFAULT 0,
     last_calculated_at       TIMESTAMP,
     updated_at               TIMESTAMP DEFAULT NOW(),
-    FOREIGN KEY (client_id) REFERENCES client(client_id) ON DELETE CASCADE
+    -- review-derived fields (added via alter_table)
+    total_reviews_received       INTEGER DEFAULT 0,
+    weighted_review_avg_received NUMERIC,
+    authenticity_confidence      NUMERIC,
+    communication_sentiment      NUMERIC,
+    consistency_score            NUMERIC,
+    dispute_fairness_score       NUMERIC,
+    responsiveness_score         NUMERIC,
+    ai_review_summary            TEXT,
+    -- client_id is really a user_id; FK repointed to users (see alter_table)
+    FOREIGN KEY (client_id) REFERENCES users(user_id) ON DELETE CASCADE
 );
 
 CREATE TRIGGER trg_client_trust_score_updated_at
@@ -785,8 +796,7 @@ CREATE TABLE IF NOT EXISTS review_ai_analysis (
     is_flagged_fake     BOOLEAN NOT NULL DEFAULT FALSE,
     is_flagged_coerced  BOOLEAN NOT NULL DEFAULT FALSE,
     flag_reasons        JSONB NOT NULL DEFAULT '[]',
-    bias_score          DECIMAL(4,3) CHECK (bias_score         BETWEEN 0 AND 1.0),
-    bias_flags          JSONB NOT NULL DEFAULT '{}',
+    mismatch_severity   NUMERIC,
     overall_pass        BOOLEAN NOT NULL DEFAULT FALSE,
     analyzed_at         TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     CONSTRAINT fk_raa_review FOREIGN KEY (review_id) REFERENCES reviews(id) ON DELETE CASCADE
@@ -853,6 +863,12 @@ CREATE TABLE IF NOT EXISTS freelancer_trust_scores (
     category_rank_pct        DECIMAL(5,2) CHECK (category_rank_pct BETWEEN 0 AND 100),
     display_star_avg         DOUBLE PRECISION,
     last_updated             TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    -- review-derived fields (added via alter_table)
+    on_time_score                NUMERIC,
+    authenticity_confidence      NUMERIC,
+    consistency_score            NUMERIC,
+    ai_review_summary            TEXT,
+    ai_review_summary_updated_at TIMESTAMP WITH TIME ZONE,
     CONSTRAINT fk_fts_freelancer FOREIGN KEY (freelancer_id) REFERENCES users(user_id) ON DELETE CASCADE
 );
 
@@ -881,6 +897,8 @@ CREATE TABLE IF NOT EXISTS red_flag_alerts (
     is_resolved   BOOLEAN NOT NULL DEFAULT FALSE,
     triggered_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     resolved_at   TIMESTAMP WITH TIME ZONE,
+    -- reused for clients too; row's freelancer_id is really the subject's user_id (see alter_table)
+    subject_type  VARCHAR(20) NOT NULL DEFAULT 'freelancer',
     CONSTRAINT fk_rfa_freelancer FOREIGN KEY (freelancer_id) REFERENCES users(user_id) ON DELETE CASCADE
 );
 
@@ -911,12 +929,24 @@ CREATE TABLE IF NOT EXISTS appeals (
     created_at    TIMESTAMP DEFAULT NOW(),
     proof_file_url VARCHAR(500),
     FOREIGN KEY (user_id)       REFERENCES users(user_id) ON DELETE CASCADE,
-    FOREIGN KEY (admin_user_id) REFERENCES users(user_id)
+    FOREIGN KEY (admin_user_id) REFERENCES users(user_id) ON DELETE SET NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_appeals_user   ON appeals (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_appeals_target ON appeals (target_type, target_id);
 CREATE INDEX IF NOT EXISTS idx_appeals_status ON appeals (status, created_at DESC);
+
+-- One row per (user, guideline section) once the user has confirmed they read it.
+-- The guideline text itself lives in the Flutter app; this only tracks the ack.
+CREATE TABLE IF NOT EXISTS user_guideline_ack (
+    ack_id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id          UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    section          VARCHAR(20) NOT NULL CHECK (section IN ('general', 'freelancer', 'client')),
+    acknowledged_at  TIMESTAMP DEFAULT NOW(),
+    UNIQUE (user_id, section)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_guideline_ack_user_id ON user_guideline_ack (user_id);
 
 CREATE TABLE IF NOT EXISTS notifications (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
