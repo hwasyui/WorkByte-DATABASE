@@ -887,3 +887,302 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_htq_content_pending_unique
 -- nothing references them. Removed from create_table.sql as well so a fresh rebuild omits them.
 DROP TABLE IF EXISTS rating CASCADE;
 DROP TABLE IF EXISTS performance_rating CASCADE;
+
+-- proposal.job_role_id was UUID NULL with FK ON DELETE SET NULL, but a proposal is required
+-- to target a specific role at create time (app-enforced). The SET NULL left orphan rows that
+-- violated that invariant whenever a role was deleted. After purging the only null-role rows
+-- (all walkthrough/test data), tightened the DB to match: role is mandatory, and deleting a
+-- role now cascades to its proposals. A role whose proposal already has a contract stays
+-- undeletable via contract -> proposal RESTRICT. The old partial unique index that only
+-- applied to NULL roles is dead and dropped.
+ALTER TABLE proposal DROP CONSTRAINT IF EXISTS proposal_job_role_id_fkey;
+ALTER TABLE proposal ADD  CONSTRAINT proposal_job_role_id_fkey
+      FOREIGN KEY (job_role_id) REFERENCES job_role(job_role_id) ON DELETE CASCADE;
+ALTER TABLE proposal ALTER COLUMN job_role_id SET NOT NULL;
+DROP INDEX IF EXISTS proposal_freelancer_job_post_null_role_uniq;
+
+
+-- ============================================================================
+-- Review subsystem: key on profile IDs, not users.user_id
+-- ============================================================================
+-- The review/trust tables were the only place in the schema where a column
+-- named freelancer_id/client_id held a users.user_id instead of a
+-- freelancer.freelancer_id / client.client_id. Everywhere else (contract,
+-- proposal, job_post, portfolio, saved_job, ...) those names mean the profile
+-- PK. That split was not cosmetic - it silently broke two functions that
+-- joined across the boundary:
+--
+--   * compute_client_responsiveness_score() queried
+--     contract WHERE client_id = <users.user_id>, which never matched, so it
+--     always returned its 0.8 fallback.
+--   * compute_client_dispute_rate_score() did the same on contract, so the
+--     dispute-fairness component of every client trust score was the constant
+--     1.0 rather than a measurement.
+--
+-- Both are ~20% of the client trust score between them. Rather than paper over
+-- it with resolve-to-user_id calls at each join site, the tables now key on the
+-- profile PK like the rest of the schema, and the handful of places that
+-- genuinely need a users.user_id (notification recipients, DM sender_id
+-- comparisons) resolve it explicitly from the profile row.
+--
+-- All review tables were empty when this ran, so the retyping below needs no
+-- backfill. On a populated database each ALTER would need a
+-- USING (SELECT freelancer_id FROM freelancer WHERE user_id = <col>) style
+-- rewrite first.
+
+-- reviews: freelancer_id -> freelancer, reviewer_id -> client (the reviewer of
+-- a freelancer is always the client party of the contract).
+ALTER TABLE reviews DROP CONSTRAINT IF EXISTS fk_reviews_freelancer;
+ALTER TABLE reviews DROP CONSTRAINT IF EXISTS fk_reviews_reviewer;
+ALTER TABLE reviews ADD CONSTRAINT fk_reviews_freelancer
+      FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE;
+ALTER TABLE reviews ADD CONSTRAINT fk_reviews_reviewer
+      FOREIGN KEY (reviewer_id)   REFERENCES client(client_id)         ON DELETE CASCADE;
+
+-- client_reviews had NO foreign keys on either party at all - the freelancer
+-- side has had fk_reviews_reviewer/fk_reviews_freelancer since it was created,
+-- so a deleted user left orphan client_reviews rows behind but not orphan
+-- reviews rows. Added here, pointing at the profile tables.
+ALTER TABLE client_reviews ADD CONSTRAINT fk_client_reviews_reviewer
+      FOREIGN KEY (reviewer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE;
+ALTER TABLE client_reviews ADD CONSTRAINT fk_client_reviews_client
+      FOREIGN KEY (client_id)   REFERENCES client(client_id)         ON DELETE CASCADE;
+
+ALTER TABLE freelancer_performance_scores DROP CONSTRAINT IF EXISTS fk_fps_freelancer;
+ALTER TABLE freelancer_performance_scores ADD CONSTRAINT fk_fps_freelancer
+      FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE;
+
+ALTER TABLE freelancer_trust_scores DROP CONSTRAINT IF EXISTS fk_fts_freelancer;
+ALTER TABLE freelancer_trust_scores ADD CONSTRAINT fk_fts_freelancer
+      FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE;
+
+ALTER TABLE trust_score_history DROP CONSTRAINT IF EXISTS fk_tsh_freelancer;
+ALTER TABLE trust_score_history ADD CONSTRAINT fk_tsh_freelancer
+      FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE;
+
+ALTER TABLE client_trust_score DROP CONSTRAINT IF EXISTS client_trust_score_client_id_fkey;
+ALTER TABLE client_trust_score ADD CONSTRAINT client_trust_score_client_id_fkey
+      FOREIGN KEY (client_id) REFERENCES client(client_id) ON DELETE CASCADE;
+
+-- red_flag_alerts held both freelancer and client subjects in a single
+-- freelancer_id column discriminated by subject_type - workable while both were
+-- users.user_id, impossible once they became different tables' PKs. Split into
+-- two nullable columns with a real FK each and a CHECK that exactly one is set,
+-- so a deleted profile can no longer strand its alerts.
+ALTER TABLE red_flag_alerts DROP CONSTRAINT IF EXISTS fk_rfa_freelancer;
+ALTER TABLE red_flag_alerts ALTER COLUMN freelancer_id DROP NOT NULL;
+ALTER TABLE red_flag_alerts ADD COLUMN IF NOT EXISTS client_id UUID;
+ALTER TABLE red_flag_alerts ADD CONSTRAINT fk_rfa_freelancer
+      FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE;
+ALTER TABLE red_flag_alerts ADD CONSTRAINT fk_rfa_client
+      FOREIGN KEY (client_id)     REFERENCES client(client_id)         ON DELETE CASCADE;
+ALTER TABLE red_flag_alerts ADD CONSTRAINT red_flag_alerts_one_subject_check
+      CHECK (num_nonnulls(freelancer_id, client_id) = 1);
+
+DROP INDEX IF EXISTS idx_rfa_unresolved;
+CREATE INDEX IF NOT EXISTS idx_rfa_client_id ON red_flag_alerts (client_id);
+CREATE INDEX IF NOT EXISTS idx_rfa_freelancer_unresolved
+    ON red_flag_alerts (freelancer_id, is_resolved) WHERE is_resolved = FALSE;
+CREATE INDEX IF NOT EXISTS idx_rfa_client_unresolved
+    ON red_flag_alerts (client_id, is_resolved)     WHERE is_resolved = FALSE;
+
+
+-- ============================================================================
+-- client_reviews*: bring up to parity with the reviews* tables
+-- ============================================================================
+-- The freelancer-side review tables were built first and carry a full set of
+-- enums, CHECKs, UNIQUEs and indexes. The client-side mirror was added later
+-- and got almost none of them, so the two halves of a deliberately symmetric
+-- feature enforced very different guarantees. Most consequential: with no
+-- UNIQUE (client_review_id, category), a double submit - possible because the
+-- submit guard is status='pending' and status only leaves 'pending' when the
+-- background pipeline finishes - inserted duplicate ratings that
+-- calculate_weighted_client_review_avg() then double-counted. The freelancer
+-- side has always rejected that via uq_review_rating_category.
+
+ALTER TABLE client_reviews ALTER COLUMN status DROP DEFAULT;
+ALTER TABLE client_reviews ALTER COLUMN status TYPE review_status USING status::review_status;
+ALTER TABLE client_reviews ALTER COLUMN status SET DEFAULT 'pending';
+
+-- created_at/published_at were naive TIMESTAMP while reviews used TIMESTAMPTZ.
+-- calculate_weighted_client_review_avg() does recency math against an aware
+-- datetime.now(timezone.utc) and had to .replace(tzinfo=utc) to compensate,
+-- which is only correct while the server happens to run UTC.
+ALTER TABLE client_reviews ALTER COLUMN created_at   TYPE TIMESTAMPTZ USING created_at   AT TIME ZONE 'UTC';
+ALTER TABLE client_reviews ALTER COLUMN published_at TYPE TIMESTAMPTZ USING published_at AT TIME ZONE 'UTC';
+ALTER TABLE client_reviews ALTER COLUMN created_at SET DEFAULT NOW();
+ALTER TABLE client_reviews ALTER COLUMN created_at SET NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_client_reviews_reviewer_id ON client_reviews (reviewer_id);
+CREATE INDEX IF NOT EXISTS idx_client_reviews_status      ON client_reviews (status);
+CREATE INDEX IF NOT EXISTS idx_client_reviews_created_at  ON client_reviews (created_at DESC);
+
+ALTER TABLE client_review_ratings ALTER COLUMN score TYPE DECIMAL(2,1);
+ALTER TABLE client_review_ratings ADD CONSTRAINT client_review_ratings_score_check
+      CHECK (score >= 1.0 AND score <= 5.0);
+ALTER TABLE client_review_ratings ADD CONSTRAINT uq_client_review_rating_category
+      UNIQUE (client_review_id, category);
+CREATE INDEX IF NOT EXISTS idx_client_review_ratings_review_id
+    ON client_review_ratings (client_review_id);
+
+ALTER TABLE client_review_written_content ADD CONSTRAINT client_review_written_content_client_review_id_key
+      UNIQUE (client_review_id);
+
+ALTER TABLE client_review_ai_analysis ADD CONSTRAINT client_review_ai_analysis_client_review_id_key
+      UNIQUE (client_review_id);
+ALTER TABLE client_review_ai_analysis ALTER COLUMN sentiment_label TYPE review_sentiment_label
+      USING sentiment_label::review_sentiment_label;
+ALTER TABLE client_review_ai_analysis ALTER COLUMN sentiment_score    TYPE DECIMAL(4,3);
+ALTER TABLE client_review_ai_analysis ALTER COLUMN authenticity_score TYPE DECIMAL(4,3);
+ALTER TABLE client_review_ai_analysis ADD CONSTRAINT client_review_ai_analysis_sentiment_score_check
+      CHECK (sentiment_score BETWEEN -1.0 AND 1.0);
+ALTER TABLE client_review_ai_analysis ADD CONSTRAINT client_review_ai_analysis_authenticity_score_check
+      CHECK (authenticity_score BETWEEN 0 AND 1.0);
+ALTER TABLE client_review_ai_analysis ALTER COLUMN sentiment_mismatch SET NOT NULL;
+ALTER TABLE client_review_ai_analysis ALTER COLUMN is_flagged_fake    SET NOT NULL;
+ALTER TABLE client_review_ai_analysis ALTER COLUMN is_flagged_coerced SET NOT NULL;
+ALTER TABLE client_review_ai_analysis ALTER COLUMN flag_reasons       SET NOT NULL;
+-- overall_pass defaulted TRUE here but FALSE on the freelancer side: a row
+-- inserted before analysis completed would have read as "passed" and been
+-- eligible to publish. Fail closed, like reviews.
+ALTER TABLE client_review_ai_analysis ALTER COLUMN overall_pass SET DEFAULT FALSE;
+ALTER TABLE client_review_ai_analysis ALTER COLUMN overall_pass SET NOT NULL;
+ALTER TABLE client_review_ai_analysis ADD COLUMN IF NOT EXISTS analyzed_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+
+-- ============================================================================
+-- client_trust_score_history
+-- ============================================================================
+-- Clients had no equivalent of trust_score_history, and
+-- ClientReviewFunctions.check_and_create_red_flag() worked around it by reading
+-- the *current* client_trust_score.trust_score as the "previous" score. Its
+-- caller (recalculate_and_persist_client_trust_score) upserts the new score
+-- before calling it, so "previous" was always the value just written: the drop
+-- was always 0.0 and no client red flag could ever fire. The freelancer path
+-- avoids this only because trust_score_history is append-only and it reads
+-- snapshots[1]. Giving clients the same table lets both sides use identical
+-- logic instead of one of them being subtly wrong.
+CREATE TABLE IF NOT EXISTS client_trust_score_history (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    client_id       UUID NOT NULL,
+    trust_score     DECIMAL(5,2) NOT NULL,
+    snapshot_reason trust_snapshot_reason NOT NULL DEFAULT 'review_published',
+    recorded_at     TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    CONSTRAINT fk_ctsh_client FOREIGN KEY (client_id) REFERENCES client(client_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_ctsh_client_id   ON client_trust_score_history (client_id);
+CREATE INDEX IF NOT EXISTS idx_ctsh_recorded_at ON client_trust_score_history (client_id, recorded_at DESC);
+
+
+-- ============================================================================
+-- Dead review columns
+-- ============================================================================
+-- freelancer_trust_scores.work_quality_score was never written by anything:
+-- ReviewFunctions.upsert_trust_score() builds its payload dict explicitly and
+-- has no such key, and no other writer touches the table. Always NULL, yet it
+-- carried a CHECK constraint and was advertised in the TrustScoreResponse
+-- model. The real work-quality signal lives per-contract in
+-- freelancer_performance_scores.work_quality_score, which is retained.
+ALTER TABLE freelancer_trust_scores DROP COLUMN IF EXISTS work_quality_score;
+
+-- client_trust_score kept six columns from the pre-review-system client scoring
+-- design. upsert_client_trust_score() writes none of them and nothing reads
+-- them; they are permanently NULL/0.
+ALTER TABLE client_trust_score DROP COLUMN IF EXISTS rating_consistency_score;
+ALTER TABLE client_trust_score DROP COLUMN IF EXISTS extreme_rating_ratio;
+ALTER TABLE client_trust_score DROP COLUMN IF EXISTS project_completion_rate;
+ALTER TABLE client_trust_score DROP COLUMN IF EXISTS average_budget_gap;
+ALTER TABLE client_trust_score DROP COLUMN IF EXISTS total_ratings_given;
+ALTER TABLE client_trust_score DROP COLUMN IF EXISTS last_calculated_at;
+
+
+-- ============================================================================
+-- contract.original_end_date - stop deadline extensions laundering on-time
+-- ============================================================================
+-- ContractFunctions.arbitrate_dispute(outcome='revise') overwrites
+-- contract.end_date with the new deadline, and compute_on_time_score() compared
+-- delivery against that. A freelancer who missed a deadline, had a dispute
+-- raised, and was granted an extension therefore scored as fully on-time - the
+-- worst outcome produced the best score, and the original commitment was gone
+-- from the database entirely.
+--
+-- original_end_date is captured once at insert and is immutable thereafter.
+-- Enforced by trigger rather than by application code: end_date is written from
+-- several paths (create, generic update_contract, arbitration) and a rule this
+-- load-bearing should not depend on every one of them remembering.
+ALTER TABLE contract ADD COLUMN IF NOT EXISTS original_end_date DATE;
+
+UPDATE contract SET original_end_date = end_date WHERE original_end_date IS NULL;
+
+CREATE OR REPLACE FUNCTION lock_original_end_date() RETURNS TRIGGER AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        -- Seed from end_date unless the caller set it explicitly.
+        IF NEW.original_end_date IS NULL THEN
+            NEW.original_end_date := NEW.end_date;
+        END IF;
+    ELSE
+        -- Immutable on update: extensions move end_date, never the original.
+        NEW.original_end_date := OLD.original_end_date;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_contract_original_end_date ON contract;
+CREATE TRIGGER trg_contract_original_end_date
+    BEFORE INSERT OR UPDATE ON contract
+    FOR EACH ROW EXECUTE FUNCTION lock_original_end_date();
+
+
+-- ============================================================================
+-- Persist the shrunk ("effective") review average
+-- ============================================================================
+-- The trust score shrinks the star average toward a neutral prior by review
+-- count (shrink_toward_prior), so a single 5-star review can no longer buy a top
+-- score. But only the RAW weighted average was ever persisted, so the API kept
+-- returning 4.625 while the score was actually computed from 3.69 - the number
+-- moved and the number clients could see did not, which defeats the point of
+-- making confidence explicit. Stored alongside the raw value rather than
+-- replacing it: the raw average is still the honest "what did people rate you",
+-- and the effective one is "what that is worth given how little evidence backs it".
+ALTER TABLE freelancer_trust_scores ADD COLUMN IF NOT EXISTS effective_review_avg NUMERIC;
+ALTER TABLE client_trust_score       ADD COLUMN IF NOT EXISTS effective_review_avg_received NUMERIC;
+
+
+-- ============================================================================
+-- job_post.project_scope_is_auto
+-- ============================================================================
+-- project_scope is either chosen by the client or recommended by
+-- calculate_project_scope(), and nothing recorded which. That mattered once the
+-- recommendation started being recomputed after creation: without provenance the
+-- only options were to overwrite deliberate client choices or to never correct a
+-- stale auto value.
+--
+-- Backfilled TRUE because every existing row was auto-set: the create path
+-- computed a scope whenever the payload omitted one, and a manual choice was
+-- indistinguishable. Rows the client explicitly set will flip to FALSE the next
+-- time they are updated with an explicit scope.
+ALTER TABLE job_post ADD COLUMN IF NOT EXISTS project_scope_is_auto BOOLEAN NOT NULL DEFAULT TRUE;
+
+
+-- ============================================================================
+-- One pending scam flag per job post
+-- ============================================================================
+-- scam_job_flags had no uniqueness on job_post_id, which was harmless only
+-- because the automatic scan ran exactly once, at creation. Now that an edit to
+-- an active post re-scans it, and the admin scan endpoint can be re-run by hand,
+-- the same job would accumulate pending rows - each with its own 30-day deadline,
+-- so the sweep would close the job off whichever row expired first.
+--
+-- Partial rather than a plain unique constraint: only PENDING flags are
+-- exclusive. A job that was flagged, actioned, and later flagged again keeps its
+-- full history, which is what the client_scam_record strike count reads.
+--
+-- Paired with the ON CONFLICT ... DO UPDATE in queue_scam_scan, which overwrites
+-- the pending row only when the re-scan scores higher. Mirrors the guard
+-- harmful_text_queue already has on (content_type, content_id).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_scam_pending_one_per_job
+    ON scam_job_flags (job_post_id)
+    WHERE status = 'pending';

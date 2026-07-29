@@ -1,4 +1,4 @@
-CREATE TYPE rate_time_type        AS ENUM ('hourly', 'daily', 'weekly', 'monthly', 'annually');
+CREATE TYPE rate_time_type        AS ENUM ('hourly', 'weekly', 'monthly', 'annually', 'daily');
 CREATE TYPE skill_category_type   AS ENUM ('hard_skill', 'soft_skill', 'tool');
 CREATE TYPE proficiency_skill     AS ENUM ('beginner', 'intermediate', 'advanced', 'expert');
 CREATE TYPE project_type          AS ENUM ('individual', 'team');
@@ -9,7 +9,7 @@ CREATE TYPE budget_type           AS ENUM ('fixed', 'negotiable');
 CREATE TYPE importance_level      AS ENUM ('nice_to_have', 'preferred', 'required');
 CREATE TYPE proposal_status       AS ENUM ('pending', 'accepted', 'rejected');
 CREATE TYPE payment_structure     AS ENUM ('full_payment', 'milestone_based');
-CREATE TYPE contract_status       AS ENUM ('active', 'completed', 'under_review', 'revision_requested', 'cancelled', 'disputed');
+CREATE TYPE contract_status       AS ENUM ('active', 'completed', 'cancelled', 'disputed', 'revision_requested', 'under_review');
 
 CREATE OR REPLACE FUNCTION set_updated_at()
 RETURNS TRIGGER AS $$
@@ -213,6 +213,9 @@ CREATE TABLE IF NOT EXISTS job_post (
     job_description    TEXT NOT NULL,
     project_type       project_type NOT NULL,
     project_scope      project_scope NOT NULL,
+    -- FALSE once a client explicitly chooses a scope; TRUE while the value is a
+    -- recommendation from calculate_project_scope() and may be recomputed.
+    project_scope_is_auto BOOLEAN NOT NULL DEFAULT TRUE,
     estimated_duration VARCHAR(100),
     working_days       INTEGER,
     deadline           DATE,
@@ -355,7 +358,7 @@ CREATE TABLE IF NOT EXISTS job_file (
 CREATE TABLE IF NOT EXISTS proposal (
     proposal_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     job_post_id       UUID NOT NULL,
-    job_role_id       UUID,
+    job_role_id       UUID NOT NULL,
     freelancer_id     UUID NOT NULL,
     cover_letter      TEXT NOT NULL,
     proposed_budget   DECIMAL(12, 2) NOT NULL,
@@ -363,15 +366,14 @@ CREATE TABLE IF NOT EXISTS proposal (
     status            proposal_status NOT NULL,
     is_ai_generated   BOOLEAN DEFAULT FALSE,
     submitted_at      TIMESTAMP DEFAULT NOW(),
-    UNIQUE (freelancer_id, job_role_id),
+    CONSTRAINT uq_proposal_freelancer_role UNIQUE (freelancer_id, job_role_id),
     FOREIGN KEY (job_post_id)   REFERENCES job_post(job_post_id)     ON DELETE CASCADE,
-    FOREIGN KEY (job_role_id)   REFERENCES job_role(job_role_id)     ON DELETE SET NULL,
+    -- A proposal always targets a real role (required at create). CASCADE so deleting a
+    -- role takes its proposals with it; a role whose proposal is already under contract
+    -- can't be deleted (contract -> proposal is RESTRICT), which is the intended guard.
+    FOREIGN KEY (job_role_id)   REFERENCES job_role(job_role_id)     ON DELETE CASCADE,
     FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE
 );
-
--- One proposal per (freelancer, job_post) when the proposal is not tied to a specific role.
-CREATE UNIQUE INDEX IF NOT EXISTS proposal_freelancer_job_post_null_role_uniq
-    ON proposal (freelancer_id, job_post_id) WHERE job_role_id IS NULL;
 
 CREATE TABLE IF NOT EXISTS proposal_file (
     proposal_file_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -388,7 +390,7 @@ CREATE TABLE IF NOT EXISTS contract (
     contract_id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     job_post_id                UUID NOT NULL,
     job_role_id                UUID NOT NULL,
-    proposal_id                UUID NOT NULL UNIQUE,
+    proposal_id                UUID NOT NULL CONSTRAINT contract_proposal_id_uniq UNIQUE,
     freelancer_id              UUID NOT NULL,
     client_id                  UUID NOT NULL,
     contract_title             VARCHAR(255) NOT NULL,
@@ -400,6 +402,11 @@ CREATE TABLE IF NOT EXISTS contract (
     status                     contract_status NOT NULL,
     start_date                 DATE NOT NULL,
     end_date                   DATE,
+    -- The deadline as originally agreed. Captured once at insert and immutable
+    -- thereafter (see trg_contract_original_end_date) so a deadline extension
+    -- granted during dispute arbitration cannot retroactively make a late
+    -- delivery score as on-time. end_date remains the live working deadline.
+    original_end_date          DATE,
     actual_completion_date     DATE,
     total_hours_worked         DECIMAL(8, 2),
     total_paid                 DECIMAL(12, 2) DEFAULT 0,
@@ -420,6 +427,23 @@ CREATE TABLE IF NOT EXISTS contract (
 CREATE TRIGGER trg_contract_updated_at
     BEFORE UPDATE ON contract
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE OR REPLACE FUNCTION lock_original_end_date() RETURNS TRIGGER AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF NEW.original_end_date IS NULL THEN
+            NEW.original_end_date := NEW.end_date;
+        END IF;
+    ELSE
+        NEW.original_end_date := OLD.original_end_date;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_contract_original_end_date
+    BEFORE INSERT OR UPDATE ON contract
+    FOR EACH ROW EXECUTE FUNCTION lock_original_end_date();
 
 CREATE TABLE IF NOT EXISTS contract_terms (
     contract_terms_id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -502,24 +526,18 @@ CREATE TABLE IF NOT EXISTS client_trust_score (
     client_trust_score_id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     client_id                UUID NOT NULL UNIQUE,
     trust_score              DECIMAL(5, 2),
-    rating_consistency_score DECIMAL(5, 2),
-    extreme_rating_ratio     DECIMAL(5, 2),
-    project_completion_rate  DECIMAL(5, 2),
-    average_budget_gap       DECIMAL(5, 2),
-    total_ratings_given      INTEGER DEFAULT 0,
-    last_calculated_at       TIMESTAMP,
     updated_at               TIMESTAMP DEFAULT NOW(),
     -- review-derived fields (added via alter_table)
     total_reviews_received       INTEGER DEFAULT 0,
     weighted_review_avg_received NUMERIC,
+    effective_review_avg_received NUMERIC,
     authenticity_confidence      NUMERIC,
     communication_sentiment      NUMERIC,
     consistency_score            NUMERIC,
     dispute_fairness_score       NUMERIC,
     responsiveness_score         NUMERIC,
     ai_review_summary            TEXT,
-    -- client_id is really a user_id; FK repointed to users (see alter_table)
-    FOREIGN KEY (client_id) REFERENCES users(user_id) ON DELETE CASCADE
+    FOREIGN KEY (client_id) REFERENCES client(client_id) ON DELETE CASCADE
 );
 
 CREATE TRIGGER trg_client_trust_score_updated_at
@@ -712,9 +730,10 @@ CREATE TABLE IF NOT EXISTS reviews (
     is_anonymous      BOOLEAN NOT NULL DEFAULT FALSE,
     created_at        TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     published_at      TIMESTAMP WITH TIME ZONE,
-    CONSTRAINT fk_reviews_contract   FOREIGN KEY (contract_id)   REFERENCES contract(contract_id) ON DELETE CASCADE,
-    CONSTRAINT fk_reviews_reviewer   FOREIGN KEY (reviewer_id)   REFERENCES users(user_id)        ON DELETE CASCADE,
-    CONSTRAINT fk_reviews_freelancer FOREIGN KEY (freelancer_id) REFERENCES users(user_id)        ON DELETE CASCADE,
+    -- reviewer is always the client party of the contract
+    CONSTRAINT fk_reviews_contract   FOREIGN KEY (contract_id)   REFERENCES contract(contract_id)     ON DELETE CASCADE,
+    CONSTRAINT fk_reviews_reviewer   FOREIGN KEY (reviewer_id)   REFERENCES client(client_id)         ON DELETE CASCADE,
+    CONSTRAINT fk_reviews_freelancer FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE,
     CONSTRAINT uq_reviews_contract   UNIQUE (contract_id)
 );
 
@@ -780,8 +799,8 @@ CREATE TABLE IF NOT EXISTS freelancer_performance_scores (
     conflict_score                 DECIMAL(4,3) CHECK (conflict_score                BETWEEN 0 AND 1.0),
     communication_summary          TEXT,
     computed_at                    TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    CONSTRAINT fk_fps_contract   FOREIGN KEY (contract_id)   REFERENCES contract(contract_id) ON DELETE CASCADE,
-    CONSTRAINT fk_fps_freelancer FOREIGN KEY (freelancer_id) REFERENCES users(user_id)        ON DELETE CASCADE
+    CONSTRAINT fk_fps_contract   FOREIGN KEY (contract_id)   REFERENCES contract(contract_id)     ON DELETE CASCADE,
+    CONSTRAINT fk_fps_freelancer FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_fps_freelancer_id ON freelancer_performance_scores (freelancer_id);
@@ -802,32 +821,45 @@ CREATE TABLE IF NOT EXISTS review_ai_analysis (
     CONSTRAINT fk_raa_review FOREIGN KEY (review_id) REFERENCES reviews(id) ON DELETE CASCADE
 );
 
+-- Freelancer-reviews-client mirror of the reviews* tables above. Deliberately
+-- symmetric: same enums, CHECKs, UNIQUEs and indexes on both halves, so a
+-- guarantee that holds for a review of a freelancer also holds for a review of
+-- a client (see alter_table.sql for what this used to look like).
 CREATE TABLE IF NOT EXISTS client_reviews (
     id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     contract_id    UUID NOT NULL,
     reviewer_id    UUID NOT NULL,
     client_id      UUID NOT NULL,
-    status         VARCHAR(20) NOT NULL DEFAULT 'pending',
+    status         review_status NOT NULL DEFAULT 'pending',
     is_anonymous   BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at     TIMESTAMP DEFAULT NOW(),
-    published_at   TIMESTAMP,
+    created_at     TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    published_at   TIMESTAMP WITH TIME ZONE,
+    -- reviewer is always the freelancer party of the contract
     CONSTRAINT client_reviews_contract_id_key  UNIQUE (contract_id),
-    CONSTRAINT client_reviews_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES contract(contract_id) ON DELETE CASCADE
+    CONSTRAINT client_reviews_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES contract(contract_id)     ON DELETE CASCADE,
+    CONSTRAINT fk_client_reviews_reviewer      FOREIGN KEY (reviewer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE,
+    CONSTRAINT fk_client_reviews_client        FOREIGN KEY (client_id)   REFERENCES client(client_id)         ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_client_reviews_client_id ON client_reviews (client_id);
+CREATE INDEX IF NOT EXISTS idx_client_reviews_client_id   ON client_reviews (client_id);
+CREATE INDEX IF NOT EXISTS idx_client_reviews_reviewer_id ON client_reviews (reviewer_id);
+CREATE INDEX IF NOT EXISTS idx_client_reviews_status      ON client_reviews (status);
+CREATE INDEX IF NOT EXISTS idx_client_reviews_created_at  ON client_reviews (created_at DESC);
 
 CREATE TABLE IF NOT EXISTS client_review_ratings (
     id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     client_review_id  UUID NOT NULL,
     category          VARCHAR(50) NOT NULL,
-    score             NUMERIC NOT NULL,
-    CONSTRAINT client_review_ratings_client_review_id_fkey FOREIGN KEY (client_review_id) REFERENCES client_reviews(id) ON DELETE CASCADE
+    score             DECIMAL(2,1) NOT NULL CHECK (score >= 1.0 AND score <= 5.0),
+    CONSTRAINT client_review_ratings_client_review_id_fkey FOREIGN KEY (client_review_id) REFERENCES client_reviews(id) ON DELETE CASCADE,
+    CONSTRAINT uq_client_review_rating_category            UNIQUE (client_review_id, category)
 );
+
+CREATE INDEX IF NOT EXISTS idx_client_review_ratings_review_id ON client_review_ratings (client_review_id);
 
 CREATE TABLE IF NOT EXISTS client_review_written_content (
     id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    client_review_id  UUID NOT NULL,
+    client_review_id  UUID NOT NULL UNIQUE,
     ai_question       TEXT,
     freelancer_answer TEXT,
     overall_comment   TEXT,
@@ -836,16 +868,17 @@ CREATE TABLE IF NOT EXISTS client_review_written_content (
 
 CREATE TABLE IF NOT EXISTS client_review_ai_analysis (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    client_review_id    UUID NOT NULL,
-    sentiment_score     NUMERIC,
-    sentiment_label     VARCHAR(20),
-    sentiment_mismatch  BOOLEAN DEFAULT FALSE,
+    client_review_id    UUID NOT NULL UNIQUE,
+    sentiment_score     DECIMAL(4,3) CHECK (sentiment_score    BETWEEN -1.0 AND 1.0),
+    sentiment_label     review_sentiment_label,
+    sentiment_mismatch  BOOLEAN NOT NULL DEFAULT FALSE,
     mismatch_severity   NUMERIC,
-    authenticity_score  NUMERIC,
-    is_flagged_fake     BOOLEAN DEFAULT FALSE,
-    is_flagged_coerced  BOOLEAN DEFAULT FALSE,
-    flag_reasons        JSONB DEFAULT '[]',
-    overall_pass        BOOLEAN DEFAULT TRUE,
+    authenticity_score  DECIMAL(4,3) CHECK (authenticity_score BETWEEN 0 AND 1.0),
+    is_flagged_fake     BOOLEAN NOT NULL DEFAULT FALSE,
+    is_flagged_coerced  BOOLEAN NOT NULL DEFAULT FALSE,
+    flag_reasons        JSONB NOT NULL DEFAULT '[]',
+    overall_pass        BOOLEAN NOT NULL DEFAULT FALSE,
+    analyzed_at         TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     CONSTRAINT client_review_ai_analysis_client_review_id_fkey FOREIGN KEY (client_review_id) REFERENCES client_reviews(id) ON DELETE CASCADE
 );
 
@@ -854,7 +887,9 @@ CREATE TABLE IF NOT EXISTS freelancer_trust_scores (
     freelancer_id            UUID NOT NULL UNIQUE,
     overall_score            DECIMAL(5,2) NOT NULL DEFAULT 0 CHECK (overall_score BETWEEN 0 AND 100),
     weighted_review_avg      DECIMAL(4,3) CHECK (weighted_review_avg    BETWEEN 0 AND 5.0),
-    work_quality_score       DECIMAL(4,3) CHECK (work_quality_score     BETWEEN 0 AND 1.0),
+    -- weighted_review_avg shrunk toward a neutral prior by review count; this is
+    -- what the trust score is actually computed from (see shrink_toward_prior)
+    effective_review_avg     NUMERIC,
     revision_rate_score      DECIMAL(4,3) CHECK (revision_rate_score    BETWEEN 0 AND 1.0),
     responsiveness_score     DECIMAL(4,3) CHECK (responsiveness_score   BETWEEN 0 AND 1.0),
     communication_sentiment  DECIMAL(4,3) CHECK (communication_sentiment BETWEEN 0 AND 1.0),
@@ -869,7 +904,7 @@ CREATE TABLE IF NOT EXISTS freelancer_trust_scores (
     consistency_score            NUMERIC,
     ai_review_summary            TEXT,
     ai_review_summary_updated_at TIMESTAMP WITH TIME ZONE,
-    CONSTRAINT fk_fts_freelancer FOREIGN KEY (freelancer_id) REFERENCES users(user_id) ON DELETE CASCADE
+    CONSTRAINT fk_fts_freelancer FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_fts_overall_score ON freelancer_trust_scores (overall_score DESC);
@@ -882,28 +917,52 @@ CREATE TABLE IF NOT EXISTS trust_score_history (
     overall_score   DECIMAL(5,2) NOT NULL,
     snapshot_reason trust_snapshot_reason NOT NULL DEFAULT 'review_published',
     recorded_at     TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    CONSTRAINT fk_tsh_freelancer FOREIGN KEY (freelancer_id) REFERENCES users(user_id) ON DELETE CASCADE
+    CONSTRAINT fk_tsh_freelancer FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_tsh_freelancer_id ON trust_score_history (freelancer_id);
 CREATE INDEX IF NOT EXISTS idx_tsh_recorded_at   ON trust_score_history (freelancer_id, recorded_at DESC);
 
+-- Client counterpart to trust_score_history. Append-only, so
+-- check_and_create_red_flag can compare the new score against the previous
+-- snapshot rather than against the row it just overwrote.
+CREATE TABLE IF NOT EXISTS client_trust_score_history (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    client_id       UUID NOT NULL,
+    trust_score     DECIMAL(5,2) NOT NULL,
+    snapshot_reason trust_snapshot_reason NOT NULL DEFAULT 'review_published',
+    recorded_at     TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    CONSTRAINT fk_ctsh_client FOREIGN KEY (client_id) REFERENCES client(client_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_ctsh_client_id   ON client_trust_score_history (client_id);
+CREATE INDEX IF NOT EXISTS idx_ctsh_recorded_at ON client_trust_score_history (client_id, recorded_at DESC);
+
+-- Subject is either a freelancer or a client, never both: one column per
+-- profile table so each can carry a real FK, with subject_type kept as a
+-- convenience discriminator for filtering.
 CREATE TABLE IF NOT EXISTS red_flag_alerts (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    freelancer_id UUID NOT NULL,
+    freelancer_id UUID,
+    client_id     UUID,
     alert_type    review_alert_type NOT NULL,
     severity      review_alert_severity NOT NULL,
     message       TEXT NOT NULL,
     is_resolved   BOOLEAN NOT NULL DEFAULT FALSE,
     triggered_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     resolved_at   TIMESTAMP WITH TIME ZONE,
-    -- reused for clients too; row's freelancer_id is really the subject's user_id (see alter_table)
     subject_type  VARCHAR(20) NOT NULL DEFAULT 'freelancer',
-    CONSTRAINT fk_rfa_freelancer FOREIGN KEY (freelancer_id) REFERENCES users(user_id) ON DELETE CASCADE
+    CONSTRAINT fk_rfa_freelancer FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE,
+    CONSTRAINT fk_rfa_client     FOREIGN KEY (client_id)     REFERENCES client(client_id)         ON DELETE CASCADE,
+    CONSTRAINT red_flag_alerts_one_subject_check CHECK (num_nonnulls(freelancer_id, client_id) = 1)
 );
 
 CREATE INDEX IF NOT EXISTS idx_rfa_freelancer_id ON red_flag_alerts (freelancer_id);
-CREATE INDEX IF NOT EXISTS idx_rfa_unresolved    ON red_flag_alerts (freelancer_id, is_resolved) WHERE is_resolved = FALSE;
+CREATE INDEX IF NOT EXISTS idx_rfa_client_id     ON red_flag_alerts (client_id);
+CREATE INDEX IF NOT EXISTS idx_rfa_freelancer_unresolved
+    ON red_flag_alerts (freelancer_id, is_resolved) WHERE is_resolved = FALSE;
+CREATE INDEX IF NOT EXISTS idx_rfa_client_unresolved
+    ON red_flag_alerts (client_id, is_resolved)     WHERE is_resolved = FALSE;
 
 CREATE TABLE IF NOT EXISTS report_auto_actions (
     action_id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -960,11 +1019,12 @@ CREATE TABLE IF NOT EXISTS notifications (
     FOREIGN KEY (recipient_id) REFERENCES users(user_id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_notifications_recipient ON notifications (recipient_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_notifications_unread    ON notifications (recipient_id, is_read) WHERE is_read = FALSE;
+CREATE INDEX IF NOT EXISTS idx_notif_recipient ON notifications (recipient_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notif_unread    ON notifications (recipient_id) WHERE is_read = FALSE;
 
 CREATE TABLE IF NOT EXISTS harmful_text_queue (
-    moderation_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    -- PK constraint name is pinned so a fresh build mirrors the live DB exactly.
+    moderation_id        UUID CONSTRAINT content_moderation_queue_pkey PRIMARY KEY DEFAULT gen_random_uuid(),
     content_type         TEXT NOT NULL,
     content_id           UUID NOT NULL,
     user_id              UUID NOT NULL,
@@ -985,7 +1045,7 @@ CREATE TABLE IF NOT EXISTS harmful_text_queue (
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
     FOREIGN KEY (admin_user_id) REFERENCES users(user_id) ON DELETE SET NULL
 );
-CREATE INDEX IF NOT EXISTS idx_htq_content ON harmful_text_queue (content_type, content_id);
+CREATE INDEX IF NOT EXISTS idx_tq_content ON harmful_text_queue (content_type, content_id);
 CREATE INDEX IF NOT EXISTS idx_htq_status  ON harmful_text_queue (status) WHERE status = 'pending';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_htq_content_pending_unique
     ON harmful_text_queue (content_type, content_id) WHERE status = 'pending';

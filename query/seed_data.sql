@@ -516,15 +516,16 @@ ON CONFLICT (contract_id) DO NOTHING;
 
 -- 16. Review (completed contract)
 
+-- reviewer_id is the client profile, freelancer_id the freelancer profile -
+-- both come straight off the contract now that the review tables key on
+-- profile ids rather than users.user_id.
+-- inferred_category must be one of infer_project_category()'s outputs, or the
+-- category rank / ai_review_prompts lookups silently find nothing.
 INSERT INTO reviews (contract_id, reviewer_id, freelancer_id, inferred_category, status, is_anonymous, published_at)
-SELECT ct.contract_id, uc.user_id, uf.user_id,
-       'software_development', 'published'::review_status, FALSE,
+SELECT ct.contract_id, ct.client_id, ct.freelancer_id,
+       'backend_dev', 'published'::review_status, FALSE,
        NOW() - INTERVAL '2 months'
 FROM contract ct
-JOIN client cl ON ct.client_id = cl.client_id
-JOIN users uc ON cl.user_id = uc.user_id
-JOIN freelancer f ON ct.freelancer_id = f.freelancer_id
-JOIN users uf ON f.user_id = uf.user_id
 WHERE ct.contract_title = 'Backend API Development - Nexus Digital SaaS Platform'
 ON CONFLICT (contract_id) DO NOTHING;
 
@@ -535,7 +536,7 @@ WHERE ct.contract_title = 'Backend API Development - Nexus Digital SaaS Platform
 ON CONFLICT (review_id, category) DO NOTHING;
 
 INSERT INTO review_ratings (review_id, category, score)
-SELECT r.id, 'work_quality', 5.0
+SELECT r.id, 'quality', 5.0
 FROM reviews r JOIN contract ct ON r.contract_id = ct.contract_id
 WHERE ct.contract_title = 'Backend API Development - Nexus Digital SaaS Platform'
 ON CONFLICT (review_id, category) DO NOTHING;
@@ -547,7 +548,7 @@ WHERE ct.contract_title = 'Backend API Development - Nexus Digital SaaS Platform
 ON CONFLICT (review_id, category) DO NOTHING;
 
 INSERT INTO review_ratings (review_id, category, score)
-SELECT r.id, 'timeline', 4.0
+SELECT r.id, 'value_for_money', 4.0
 FROM reviews r JOIN contract ct ON r.contract_id = ct.contract_id
 WHERE ct.contract_title = 'Backend API Development - Nexus Digital SaaS Platform'
 ON CONFLICT (review_id, category) DO NOTHING;
@@ -676,8 +677,12 @@ ON CONFLICT (job_role_id) DO NOTHING;
 
 
 -- 22. AI review prompts (category-specific questions for the post-completion review pipeline)
--- Categories must match review_pipeline.infer_project_category() output.
--- get_targeted_question() picks one at random per category; 'general' is the fallback.
+-- Categories MUST match JobPostFunctions.infer_project_category() output, which is what
+-- gets persisted to job_post.project_category and copied into reviews.inferred_category.
+-- These are now the FALLBACK path: the pipeline generates a project-specific question via
+-- generate_targeted_question() and only falls back to this table when the LLM is
+-- unavailable or its output fails validation. 'general' is the last resort before the
+-- hardcoded string.
 
 INSERT INTO ai_review_prompts (project_category, question_text, is_active) VALUES
 
@@ -711,10 +716,10 @@ INSERT INTO ai_review_prompts (project_category, question_text, is_active) VALUE
     ('graphic_design', 'Did the freelancer deliver the assets in the correct formats and resolutions for your use case?', TRUE),
     ('graphic_design', 'How well did the freelancer understand and represent your brand identity in the work?', TRUE),
 
-    -- copywriting
-    ('copywriting', 'How well did the content align with your brand voice, target audience, and messaging goals?', TRUE),
-    ('copywriting', 'Did the freelancer deliver the copy on time and incorporate your revision requests effectively?', TRUE),
-    ('copywriting', 'How satisfied are you with the clarity, engagement level, and originality of the written content?', TRUE),
+    -- copy_writing (label must match JobPostFunctions.infer_project_category)
+    ('copy_writing', 'How well did the content align with your brand voice, target audience, and messaging goals?', TRUE),
+    ('copy_writing', 'Did the freelancer deliver the copy on time and incorporate your revision requests effectively?', TRUE),
+    ('copy_writing', 'How satisfied are you with the clarity, engagement level, and originality of the written content?', TRUE),
 
     -- data_analytics
     ('data_analytics', 'How clearly and accurately did the freelancer present the data insights and findings?', TRUE),
