@@ -1186,3 +1186,65 @@ ALTER TABLE job_post ADD COLUMN IF NOT EXISTS project_scope_is_auto BOOLEAN NOT 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_scam_pending_one_per_job
     ON scam_job_flags (job_post_id)
     WHERE status = 'pending';
+
+
+-- ============================================================================
+-- mismatch_severity -> disagreement_probability
+-- ============================================================================
+-- This column changed meaning, and the old name became actively misleading.
+--
+-- It used to hold |predicted_rating - actual_rating| in STARS, a 0-4 residual
+-- from a regressor that guessed the rating a review's text implied. That
+-- regressor has been removed from the backend. Two measurements on held-out
+-- data killed it:
+--
+--   * As a detector it was structurally wrong. The rule was
+--     |f(text) - rating| >= 1.5, and f never sees the rating, so it cannot
+--     learn "harsh text with 1 star is fine, harsh text with 5 stars is
+--     suspicious". A genuinely scathing 1-star review produced a 1.7-star
+--     residual and got flagged as suspicious.
+--   * As a trust input it was biased by rating level. On pairs where text and
+--     rating genuinely AGREED, mean severity ran 2.034 stars for 1-star
+--     reviews against 0.502 for 5-star ones, because 60% of the training
+--     corpus was 5-star and the model reverted to that mean. Via
+--     consistency_score that handed 0.492 to freelancers whose clients rate
+--     honestly low and 0.874 to those rated high - double jeopardy, since the
+--     low ratings already cost them elsewhere. Averaging does not fix it:
+--     that is bias, not noise.
+--
+-- The replacement is a classifier that judges the (text, rating) PAIR, so the
+-- rating is an input rather than something subtracted afterwards. It emits a
+-- PROBABILITY in 0-1, and its equivalent 1-vs-5-star spread is -0.054.
+--
+-- Existing values are DELETED rather than converted. They are 0-4 star gaps,
+-- and there is no arithmetic that turns a star gap into that classifier's
+-- probability - it is a different model with different inputs. Leaving them
+-- would be worse than losing them: client_review_ai_analysis held 1.816 and
+-- 2.907, and read as probabilities those drive
+-- consistency_score = max(0, 1 - avg) straight to 0, scoring those clients as
+-- maximally inconsistent on a unit mismatch. The affected reviews can be
+-- re-analysed through the pipeline to repopulate honestly.
+--
+-- DECIMAL(4,3) with a range CHECK rather than bare NUMERIC, matching
+-- sentiment_score and authenticity_score on the same tables. The old column
+-- had no CHECK, which is part of why a 2.907 could sit in it unnoticed.
+-- ============================================================================
+
+ALTER TABLE review_ai_analysis        RENAME COLUMN mismatch_severity TO disagreement_probability;
+ALTER TABLE client_review_ai_analysis RENAME COLUMN mismatch_severity TO disagreement_probability;
+
+-- Must run BEFORE the CHECK below: the pre-existing star-gap values violate it.
+UPDATE review_ai_analysis        SET disagreement_probability = NULL;
+UPDATE client_review_ai_analysis SET disagreement_probability = NULL;
+
+ALTER TABLE review_ai_analysis
+    ALTER COLUMN disagreement_probability TYPE DECIMAL(4,3);
+ALTER TABLE client_review_ai_analysis
+    ALTER COLUMN disagreement_probability TYPE DECIMAL(4,3);
+
+ALTER TABLE review_ai_analysis
+    ADD CONSTRAINT chk_raa_disagreement_probability
+    CHECK (disagreement_probability BETWEEN 0 AND 1);
+ALTER TABLE client_review_ai_analysis
+    ADD CONSTRAINT chk_craa_disagreement_probability
+    CHECK (disagreement_probability BETWEEN 0 AND 1);

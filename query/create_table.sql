@@ -815,7 +815,7 @@ CREATE TABLE IF NOT EXISTS review_ai_analysis (
     is_flagged_fake     BOOLEAN NOT NULL DEFAULT FALSE,
     is_flagged_coerced  BOOLEAN NOT NULL DEFAULT FALSE,
     flag_reasons        JSONB NOT NULL DEFAULT '[]',
-    mismatch_severity   NUMERIC,
+    disagreement_probability DECIMAL(4,3) CHECK (disagreement_probability BETWEEN 0 AND 1),
     overall_pass        BOOLEAN NOT NULL DEFAULT FALSE,
     analyzed_at         TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     CONSTRAINT fk_raa_review FOREIGN KEY (review_id) REFERENCES reviews(id) ON DELETE CASCADE
@@ -872,7 +872,7 @@ CREATE TABLE IF NOT EXISTS client_review_ai_analysis (
     sentiment_score     DECIMAL(4,3) CHECK (sentiment_score    BETWEEN -1.0 AND 1.0),
     sentiment_label     review_sentiment_label,
     sentiment_mismatch  BOOLEAN NOT NULL DEFAULT FALSE,
-    mismatch_severity   NUMERIC,
+    disagreement_probability DECIMAL(4,3) CHECK (disagreement_probability BETWEEN 0 AND 1),
     authenticity_score  DECIMAL(4,3) CHECK (authenticity_score BETWEEN 0 AND 1.0),
     is_flagged_fake     BOOLEAN NOT NULL DEFAULT FALSE,
     is_flagged_coerced  BOOLEAN NOT NULL DEFAULT FALSE,
