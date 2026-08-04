@@ -1248,3 +1248,103 @@ ALTER TABLE review_ai_analysis
 ALTER TABLE client_review_ai_analysis
     ADD CONSTRAINT chk_craa_disagreement_probability
     CHECK (disagreement_probability BETWEEN 0 AND 1);
+
+
+-- ============================================================================
+-- red_flag_alerts: record WHO resolved an alert and WHY
+-- ============================================================================
+-- A red flag is a claim that something went wrong with a person's reputation -
+-- currently only score_drop, fired when a trust score falls more than 10 points
+-- between two consecutive trust_score_history snapshots.
+--
+-- Resolving one was a bare boolean flip. is_resolved went TRUE and nothing else
+-- was written, so a closed alert could not distinguish "investigated, the
+-- decline is genuine" from "cleared to get the badge off the dashboard". Those
+-- are opposite conclusions about the same person, and neither the admin who
+-- reached one nor their reasoning was recorded anywhere - not in this table, not
+-- in an audit table, not in the application log beyond an id.
+--
+-- That matters more here than for most admin actions, because the subject of a
+-- red flag is a freelancer or client whose reputation score is the thing being
+-- questioned. An unexplained resolution leaves no way to show the decision was
+-- made on evidence, and no way for a second admin to pick up where the first
+-- stopped.
+--
+-- Both columns are NULLABLE with no backfill. Alerts resolved before this
+-- migration genuinely have no attribution and inventing one would be worse than
+-- leaving it absent - a NULL resolved_by reads as "resolved before we recorded
+-- this", which is true.
+--
+-- resolved_by is ON DELETE SET NULL rather than CASCADE: an admin account being
+-- removed must not delete the alert history they acted on.
+--
+-- The backend tolerates a database without these columns. admin_functions.
+-- resolve_red_flag_alert() probes information_schema once per process and falls
+-- back to the old boolean-only UPDATE, returning resolution_recorded=false so
+-- the UI can say the note was not stored rather than silently dropping it.
+-- Applying this migration is what turns that flag true.
+--
+-- Already applied to the live database.
+-- ============================================================================
+
+ALTER TABLE red_flag_alerts ADD COLUMN IF NOT EXISTS resolved_by UUID;
+ALTER TABLE red_flag_alerts ADD COLUMN IF NOT EXISTS resolution_note TEXT;
+
+ALTER TABLE red_flag_alerts
+    ADD CONSTRAINT fk_rfa_resolved_by
+    FOREIGN KEY (resolved_by) REFERENCES users(user_id) ON DELETE SET NULL;
+
+
+-- ============================================================================
+-- lock_original_end_date - seed the original deadline when it first exists
+-- ============================================================================
+-- original_end_date is the baseline on-time delivery is scored against, kept
+-- separate from end_date so an extension granted in arbitration cannot turn a
+-- late delivery into an on-time one. It fed compute_on_time_score, which is 15%
+-- of the freelancer performance score and the objective counterpart to the
+-- timeliness rating that review_consistency.py checks written reviews against.
+--
+-- It was seeded in the INSERT branch only. end_date is nullable, so a contract can
+-- be inserted without one - and when that happened the ELSE branch, whose whole job
+-- is to reject changes, copied the resulting NULL forward on every later update.
+--
+-- So the insert seeded original_end_date from a NULL end_date, and the ELSE
+-- branch, whose whole job is to reject changes, then copied that NULL forward on
+-- every subsequent update. The column was permanently NULL for every contract
+-- created under the new flow, and nothing failed loudly: on-time scoring simply
+-- had no baseline, and the admin analytics fall back to end_date, which is the
+-- extended deadline - exactly the laundering the column exists to prevent.
+--
+-- The fix keeps the guarantee and moves when it starts applying. Immutability now
+-- begins at the first non-NULL end date instead of at insert, which is the same
+-- rule the column was always meant to express: the deadline as first agreed. Once
+-- set it is frozen exactly as before.
+--
+-- Backfill is deliberately limited to rows that never got a baseline. For a
+-- contract that has been extended, end_date today is the extended deadline and
+-- writing it into original_end_date would bless the extension as the original.
+-- These rows have no record of an earlier deadline either way; taking the only
+-- end date they have is the honest reconstruction, and it is strictly better than
+-- the NULL that scores nothing at all.
+--
+-- Already applied to the live database.
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION lock_original_end_date() RETURNS TRIGGER AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF NEW.original_end_date IS NULL THEN
+            NEW.original_end_date := NEW.end_date;
+        END IF;
+    ELSIF OLD.original_end_date IS NULL THEN
+        NEW.original_end_date := NEW.end_date;
+    ELSE
+        NEW.original_end_date := OLD.original_end_date;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+UPDATE contract
+SET original_end_date = end_date
+WHERE original_end_date IS NULL AND end_date IS NOT NULL;

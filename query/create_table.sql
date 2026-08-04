@@ -402,10 +402,11 @@ CREATE TABLE IF NOT EXISTS contract (
     status                     contract_status NOT NULL,
     start_date                 DATE NOT NULL,
     end_date                   DATE,
-    -- The deadline as originally agreed. Captured once at insert and immutable
-    -- thereafter (see trg_contract_original_end_date) so a deadline extension
-    -- granted during dispute arbitration cannot retroactively make a late
-    -- delivery score as on-time. end_date remains the live working deadline.
+    -- The deadline as originally agreed. Captured the first time an end date is
+    -- known and immutable thereafter (see trg_contract_original_end_date) so a
+    -- deadline extension granted during dispute arbitration cannot retroactively
+    -- make a late delivery score as on-time. end_date remains the live working
+    -- deadline.
     original_end_date          DATE,
     actual_completion_date     DATE,
     total_hours_worked         DECIMAL(8, 2),
@@ -434,6 +435,13 @@ BEGIN
         IF NEW.original_end_date IS NULL THEN
             NEW.original_end_date := NEW.end_date;
         END IF;
+    ELSIF OLD.original_end_date IS NULL THEN
+        -- end_date is nullable, so a contract can be inserted without one. Seeding
+        -- only at insert left original_end_date NULL in that case, and the branch
+        -- below then froze that NULL forever - the row could never acquire a
+        -- baseline, and on-time delivery had nothing to score against. The first end
+        -- date to land is the one that was originally agreed.
+        NEW.original_end_date := NEW.end_date;
     ELSE
         NEW.original_end_date := OLD.original_end_date;
     END IF;
@@ -952,8 +960,17 @@ CREATE TABLE IF NOT EXISTS red_flag_alerts (
     triggered_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     resolved_at   TIMESTAMP WITH TIME ZONE,
     subject_type  VARCHAR(20) NOT NULL DEFAULT 'freelancer',
+    -- Who closed the alert and why. Nullable: alerts resolved before these
+    -- columns existed carry no attribution, and a NULL is more honest than a
+    -- backfilled guess. Without them a resolved alert cannot distinguish
+    -- "investigated, the decline is genuine" from "cleared to clear the badge".
+    resolved_by     UUID,
+    resolution_note TEXT,
     CONSTRAINT fk_rfa_freelancer FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE,
     CONSTRAINT fk_rfa_client     FOREIGN KEY (client_id)     REFERENCES client(client_id)         ON DELETE CASCADE,
+    -- SET NULL, not CASCADE: removing an admin account must not delete the alert
+    -- history they acted on.
+    CONSTRAINT fk_rfa_resolved_by FOREIGN KEY (resolved_by)  REFERENCES users(user_id)            ON DELETE SET NULL,
     CONSTRAINT red_flag_alerts_one_subject_check CHECK (num_nonnulls(freelancer_id, client_id) = 1)
 );
 
