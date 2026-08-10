@@ -539,6 +539,10 @@ CREATE TABLE IF NOT EXISTS client_trust_score (
     total_reviews_received       INTEGER DEFAULT 0,
     weighted_review_avg_received NUMERIC,
     effective_review_avg_received NUMERIC,
+    -- Plain AVG over published client_review_ratings - the public figure, mirroring
+    -- freelancer_trust_scores.display_star_avg. The two weighted columns above are
+    -- scoring inputs and are withheld by review_views.public_trust_score.
+    display_star_avg             DOUBLE PRECISION,
     authenticity_confidence      NUMERIC,
     communication_sentiment      NUMERIC,
     consistency_score            NUMERIC,

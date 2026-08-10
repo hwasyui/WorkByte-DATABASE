@@ -1348,3 +1348,224 @@ $$ LANGUAGE plpgsql;
 UPDATE contract
 SET original_end_date = end_date
 WHERE original_end_date IS NULL AND end_date IS NOT NULL;
+
+
+-- ============================================================================
+-- client_trust_score.display_star_avg
+--
+-- The client side had no plain star average. freelancer_trust_scores carries two
+-- numbers - weighted_review_avg (the scoring input) and display_star_avg (a bare
+-- AVG over published ratings) - and review_views withholds the first because, in
+-- its own words, "display_star_avg is the public figure". client_trust_score only
+-- ever had the weighted one, so weighted_review_avg_received was being rendered
+-- directly as a client's star rating on three screens.
+--
+-- That number is not a mean. It is
+--   SUM(score * recency * authenticity * repeat_decay * deflation) / SUM(weights),
+-- so a client holding three recent 5-star reviews can display 4.1, and nobody
+-- averaging the visible ratings can reproduce it. It also multiplies each review
+-- by its authenticity score, which puts a moderation conclusion into a public
+-- figure - the exact thing review_views.py exists to prevent.
+--
+-- DOUBLE PRECISION and nullable, matching freelancer_trust_scores.display_star_avg
+-- rather than the DECIMAL(4,3) used for the weighted columns: this is a 1-5 star
+-- mean for display, not a 0-1 scoring input, and NULL means "no published reviews
+-- yet" rather than zero stars.
+--
+-- Backfilled, deliberately. Without it every existing client shows no rating
+-- until they happen to receive their next review, since the value is otherwise
+-- only written by recalculate_and_persist_client_trust_score. The alternative
+-- considered - falling back to weighted_review_avg_received at read time - was
+-- rejected: that serves the weighted figure under a name that promises a plain
+-- mean, which is worse than either showing it honestly or showing nothing.
+--
+-- The backfill is the same arithmetic the pipeline will compute, so a row it
+-- touches and a row recalculated afterwards agree. Only NULL rows are filled, so
+-- re-running this file cannot overwrite a freshly computed value.
+-- ============================================================================
+
+ALTER TABLE client_trust_score ADD COLUMN IF NOT EXISTS display_star_avg DOUBLE PRECISION;
+
+UPDATE client_trust_score cts
+SET display_star_avg = sub.avg_score
+FROM (
+    SELECT cr.client_id,
+           ROUND(AVG(crr.score)::numeric, 2) AS avg_score
+    FROM client_reviews cr
+    JOIN client_review_ratings crr ON crr.client_review_id = cr.id
+    WHERE cr.status = 'published'
+    GROUP BY cr.client_id
+) sub
+WHERE cts.client_id = sub.client_id
+  AND cts.display_star_avg IS NULL;
+
+ALTER TYPE contract_status ADD VALUE IF NOT EXISTS 'pending_payment';
+ALTER TYPE contract_status ADD VALUE IF NOT EXISTS 'payment_review';
+ALTER TYPE contract_status ADD VALUE IF NOT EXISTS 'payment_rejected';
+
+DO $$ BEGIN
+    CREATE TYPE payment_proof_status AS ENUM ('pending_review', 'verified', 'rejected');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+    CREATE TYPE payment_payee AS ENUM ('freelancer', 'admin');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+ALTER TABLE contract ADD COLUMN IF NOT EXISTS commission_rate DECIMAL(5, 4);
+ALTER TABLE contract ADD COLUMN IF NOT EXISTS commission_amount DECIMAL(12, 2);
+ALTER TABLE contract ADD COLUMN IF NOT EXISTS payout_amount DECIMAL(12, 2);
+ALTER TABLE contract ADD COLUMN IF NOT EXISTS freelancer_confirmed_receipt_at TIMESTAMP;
+ALTER TABLE contract ADD COLUMN IF NOT EXISTS payment_verified_at TIMESTAMP;
+ALTER TABLE contract ADD COLUMN IF NOT EXISTS payment_verified_by UUID REFERENCES users(user_id);
+ALTER TABLE contract ADD COLUMN IF NOT EXISTS completed_by_admin_override BOOLEAN DEFAULT FALSE;
+
+CREATE TABLE IF NOT EXISTS payment_proof (
+    proof_id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    contract_id      UUID NOT NULL,
+    payee            payment_payee NOT NULL,
+    amount           DECIMAL(12, 2) NOT NULL,
+    reference_number VARCHAR(255),
+    file_url         TEXT NOT NULL,
+    uploaded_by      UUID NOT NULL,
+    status           payment_proof_status NOT NULL DEFAULT 'pending_review',
+    rejection_reason TEXT,
+    verified_by      UUID,
+    verified_at      TIMESTAMP,
+    created_at       TIMESTAMP DEFAULT NOW(),
+    updated_at       TIMESTAMP DEFAULT NOW(),
+    FOREIGN KEY (contract_id) REFERENCES contract(contract_id) ON DELETE CASCADE,
+    FOREIGN KEY (uploaded_by) REFERENCES users(user_id)        ON DELETE CASCADE,
+    FOREIGN KEY (verified_by) REFERENCES users(user_id)        ON DELETE SET NULL
+);
+
+DROP TRIGGER IF EXISTS trg_payment_proof_updated_at ON payment_proof;
+CREATE TRIGGER trg_payment_proof_updated_at
+    BEFORE UPDATE ON payment_proof
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE INDEX IF NOT EXISTS idx_payment_proof_contract_id ON payment_proof (contract_id);
+CREATE INDEX IF NOT EXISTS idx_payment_proof_status      ON payment_proof (status);
+CREATE INDEX IF NOT EXISTS idx_payment_proof_uploaded_by ON payment_proof (uploaded_by);
+
+CREATE TABLE IF NOT EXISTS freelancer_payout_info (
+    freelancer_id       UUID PRIMARY KEY,
+    bank_name           VARCHAR(255),
+    account_number      VARCHAR(100),
+    account_holder_name VARCHAR(255),
+    updated_at          TIMESTAMP DEFAULT NOW(),
+    FOREIGN KEY (freelancer_id) REFERENCES freelancer(freelancer_id) ON DELETE CASCADE
+);
+
+DROP TRIGGER IF EXISTS trg_freelancer_payout_info_updated_at ON freelancer_payout_info;
+CREATE TRIGGER trg_freelancer_payout_info_updated_at
+    BEFORE UPDATE ON freelancer_payout_info
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+
+-- ============================================================================
+-- milestone: replace full_payment with milestone-based payments only
+--
+-- Contracts no longer choose between full_payment and milestone_based - every
+-- contract is created with an explicit milestone schedule (title + amount per
+-- milestone, summing to agreed_budget) instead. Milestones unlock strictly in
+-- sequence_order: exactly one milestone per contract is ever "live" at a time,
+-- which is what lets every submission/payment-proof route keep taking just a
+-- contract_id - the milestone a call applies to is never ambiguous.
+--
+-- milestone.status is a plain varchar, not the contract_status enum, because it
+-- needs a 'locked' state (not yet unlocked) that contract_status has no
+-- equivalent for - a contract is never "not started yet" the way a milestone
+-- behind the current one is. Every other status value mirrors contract_status
+-- so the two stay easy to reason about side by side.
+--
+-- The commission/payout/verification columns mirror what used to live only on
+-- `contract` (see the commission_rate/commission_amount/... block above): each
+-- milestone now carries its own, and contract's copies become a roll-up (sum of
+-- commission_amount/payout_amount, last verified_at/by) written once the final
+-- milestone completes - so the admin commission dashboard, which reads
+-- contract.commission_amount, keeps working unchanged.
+--
+-- Existing contracts are backfilled with a single milestone each
+-- (amount = agreed_budget, status derived from the contract's own status), and
+-- their existing contract_submission / payment_proof rows are re-linked to it,
+-- so no submission or payment history is orphaned by this change.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS milestone (
+    milestone_id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    contract_id                     UUID NOT NULL,
+    title                           VARCHAR(255) NOT NULL,
+    description                     TEXT,
+    amount                          DECIMAL(12, 2) NOT NULL CHECK (amount > 0),
+    sequence_order                  INT NOT NULL,
+    status                          VARCHAR(50) NOT NULL DEFAULT 'locked',
+    due_date                        DATE,
+    commission_rate                 DECIMAL(5, 4),
+    commission_amount               DECIMAL(12, 2),
+    payout_amount                   DECIMAL(12, 2),
+    freelancer_confirmed_receipt_at TIMESTAMPTZ,
+    payment_verified_at             TIMESTAMPTZ,
+    payment_verified_by             UUID,
+    completed_by_admin_override     BOOLEAN DEFAULT FALSE,
+    created_at                      TIMESTAMPTZ DEFAULT NOW(),
+    updated_at                      TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (contract_id, sequence_order),
+    FOREIGN KEY (contract_id)         REFERENCES contract(contract_id) ON DELETE CASCADE,
+    FOREIGN KEY (payment_verified_by) REFERENCES users(user_id)        ON DELETE SET NULL
+);
+
+DROP TRIGGER IF EXISTS trg_milestone_updated_at ON milestone;
+CREATE TRIGGER trg_milestone_updated_at
+    BEFORE UPDATE ON milestone
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE INDEX IF NOT EXISTS idx_milestone_contract_id ON milestone (contract_id);
+CREATE INDEX IF NOT EXISTS idx_milestone_status       ON milestone (status);
+
+-- Backfill: one milestone per existing contract, carrying over whatever payment
+-- progress that contract already had so in-flight rows don't lose history. Guarded
+-- so re-running this file against an already-migrated database is a no-op here.
+INSERT INTO milestone (
+    contract_id, title, amount, sequence_order, status,
+    commission_rate, commission_amount, payout_amount,
+    freelancer_confirmed_receipt_at, payment_verified_at, payment_verified_by,
+    completed_by_admin_override
+)
+SELECT
+    c.contract_id,
+    c.contract_title,
+    c.agreed_budget,
+    1,
+    CASE
+        WHEN c.status::text IN ('active', 'under_review', 'revision_requested',
+                                 'pending_payment', 'payment_review', 'payment_rejected',
+                                 'completed')
+            THEN c.status::text
+        ELSE 'active'  -- cancelled / disputed contracts: contract.status stays authoritative
+    END,
+    c.commission_rate, c.commission_amount, c.payout_amount,
+    c.freelancer_confirmed_receipt_at, c.payment_verified_at, c.payment_verified_by,
+    c.completed_by_admin_override
+FROM contract c
+WHERE NOT EXISTS (SELECT 1 FROM milestone m WHERE m.contract_id = c.contract_id);
+
+-- Re-link existing deliverables and payment proofs to the backfilled milestone.
+ALTER TABLE contract_submission ADD COLUMN IF NOT EXISTS milestone_id UUID REFERENCES milestone(milestone_id) ON DELETE CASCADE;
+UPDATE contract_submission cs
+SET milestone_id = m.milestone_id
+FROM milestone m
+WHERE m.contract_id = cs.contract_id AND cs.milestone_id IS NULL;
+ALTER TABLE contract_submission ALTER COLUMN milestone_id SET NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_contract_submission_milestone_id ON contract_submission (milestone_id);
+
+ALTER TABLE payment_proof ADD COLUMN IF NOT EXISTS milestone_id UUID REFERENCES milestone(milestone_id) ON DELETE CASCADE;
+UPDATE payment_proof pp
+SET milestone_id = m.milestone_id
+FROM milestone m
+WHERE m.contract_id = pp.contract_id AND pp.milestone_id IS NULL;
+ALTER TABLE payment_proof ALTER COLUMN milestone_id SET NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_payment_proof_milestone_id ON payment_proof (milestone_id);
+
+-- full_payment is no longer offered; every contract is milestone-based now.
+ALTER TABLE contract DROP COLUMN IF EXISTS payment_structure;
+DROP TYPE IF EXISTS payment_structure;
